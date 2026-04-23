@@ -8,6 +8,13 @@ from backend.models.schemas import (
     AutoPilotCompleteRequest,
     GuidedBlockRequest, GuidedBlockResponse,
     GuidedCompleteRequest,
+    SmartGuidedQuestionsRequest, SmartGuidedQuestionsResponse,
+    SmartGuidedCompleteRequest,
+    ConversationalMessageRequest, ConversationalMessageResponse,
+    GuidedAnalysisRequest, GuidedAnalysisBlocks,
+    GuidedLoopStartRequest, GuidedLoopStartResponse,
+    GuidedLoopAnswerRequest, GuidedLoopAnswerResponse,
+    GuidedLoopSessionState, GuidedLoopQuestion, AnalysisConfidence,
     SolutionOutput, ArchitectureSummary, ReasoningLog, CytoscapeElements,
     BusinessRequirements,
 )
@@ -17,10 +24,19 @@ from backend.agents.mode_selection_agent import ModeSelectionAgent
 from backend.agents.auto_pilot_agent import AutoPilotAgent
 from backend.agents.business_requirement_agent import BusinessRequirementAgent
 from backend.agents.guided_agent import GuidedAgent
+from backend.agents.smart_guided_agent import SmartGuidedAgent
+from backend.agents.conversational_guided_agent import ConversationalGuidedAgent
+from backend.agents.analysis_blocks_agent import AnalysisBlocksAgent
+from backend.agents.analysis_confidence_agent import AnalysisConfidenceAgent
+from backend.agents.question_loop_agent import QuestionLoopAgent
 from backend.agents.template_agent import TemplateAgent
 from backend.agents.reasoning_agent import ReasoningAgent
+from pydantic import ValidationError
+from backend.utils.guided_loop_store import GuidedLoopStore
 
 router = APIRouter(prefix="/api", tags=["architecture"])
+
+_guided_loop_store = GuidedLoopStore(ttl_seconds=3600)
 
 
 @lru_cache(maxsize=1)
@@ -98,13 +114,18 @@ async def auto_complete(req: AutoPilotCompleteRequest):
     try:
         client = _get_client()
 
-        biz_agent = BusinessRequirementAgent(client)
-        requirements = await biz_agent.run(
+        analysis_blocks = await _validated_analysis_blocks(
+            client,
             user_input=req.user_input,
             scope=req.scope.model_dump(),
-            auto_pilot_init=req.auto_pilot_init.model_dump(),
-            quick_inputs=req.quick_inputs.model_dump(),
+            previous_answers={
+                "users": req.quick_inputs.users,
+                "visibility": req.quick_inputs.visibility,
+                "uptime": req.quick_inputs.uptime,
+                **(req.auto_pilot_init.confirmed_detections.model_dump() if req.auto_pilot_init else {}),
+            },
         )
+        requirements = _analysis_blocks_to_requirements(analysis_blocks, req.scope.model_dump())
 
         tmpl_agent = TemplateAgent(client)
         template_result = await tmpl_agent.run(requirements=requirements)
@@ -115,7 +136,7 @@ async def auto_complete(req: AutoPilotCompleteRequest):
             requirements=requirements,
         )
 
-        return _build_solution(template_result, reasoning_result, requirements)
+        return _build_solution(template_result, reasoning_result, requirements, analysis_blocks=analysis_blocks)
     except HTTPException:
         raise
     except Exception as exc:
@@ -153,7 +174,13 @@ async def guided_complete(req: GuidedCompleteRequest):
             if isinstance(block_answers, dict):
                 flat_answers.update(block_answers)
 
-        requirements = _guided_answers_to_requirements(flat_answers, req.scope.model_dump())
+        analysis_blocks = await _validated_analysis_blocks(
+            client,
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            previous_answers=flat_answers,
+        )
+        requirements = _analysis_blocks_to_requirements(analysis_blocks, req.scope.model_dump())
 
         tmpl_agent = TemplateAgent(client)
         template_result = await tmpl_agent.run(requirements=requirements)
@@ -164,15 +191,275 @@ async def guided_complete(req: GuidedCompleteRequest):
             requirements=requirements,
         )
 
-        return _build_solution(template_result, reasoning_result, requirements)
+        return _build_solution(template_result, reasoning_result, requirements, analysis_blocks=analysis_blocks)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Guided complete failed: {exc}") from exc
 
 
+@router.post("/guided/smart/questions", response_model=SmartGuidedQuestionsResponse)
+async def smart_guided_questions(req: SmartGuidedQuestionsRequest):
+    """
+    Smart Guided Mode — Step 1.
+    Pre-fills what it can from scope, then generates the minimum questions
+    (always 3-7) the user must answer to complete the 7 analysis blocks.
+    """
+    try:
+        client = _get_client()
+        agent = SmartGuidedAgent(client)
+        result = await agent.run(
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+        )
+        return SmartGuidedQuestionsResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Smart guided questions failed: {exc}") from exc
+
+
+@router.post("/guided/smart/complete", response_model=SolutionOutput)
+async def smart_guided_complete(req: SmartGuidedCompleteRequest):
+    """
+    Smart Guided Mode — Step 2.
+    Takes user answers from the smart questions, fills all 7 analysis blocks,
+    and generates the architecture solution.
+    """
+    try:
+        client = _get_client()
+        analysis_blocks = await _validated_analysis_blocks(
+            client,
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            previous_answers=req.answers,
+        )
+        requirements = _analysis_blocks_to_requirements(analysis_blocks, req.scope.model_dump())
+
+        tmpl_agent = TemplateAgent(client)
+        template_result = await tmpl_agent.run(requirements=requirements)
+
+        rsn_agent = ReasoningAgent(client)
+        reasoning_result = await rsn_agent.run(
+            template_result=template_result,
+            requirements=requirements,
+        )
+
+        return _build_solution(template_result, reasoning_result, requirements, analysis_blocks=analysis_blocks)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Smart guided complete failed: {exc}") from exc
+
+
+@router.post("/guided/conversation/message", response_model=ConversationalMessageResponse)
+async def conversational_message(req: ConversationalMessageRequest):
+    """
+    Conversational Guided Mode — send one message, get one question back.
+    When the LLM has collected enough information, returns is_complete=true
+    and collected_answers. Frontend then calls /guided/smart/complete.
+    """
+    try:
+        client = _get_client()
+        agent = ConversationalGuidedAgent(client)
+        result = await agent.run(
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            conversation=[t.model_dump() for t in req.conversation],
+            user_message=req.message,
+        )
+        return ConversationalMessageResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Conversational message failed: {exc}") from exc
+
+
+# ── Guided Loop Mode (confidence-driven, multi-turn) ─────────────────────────
+@router.post("/guided/loop/start", response_model=GuidedLoopStartResponse)
+async def guided_loop_start(req: GuidedLoopStartRequest):
+    """
+    Start a new guided-loop session:
+    - Run analysis (7 blocks + confidence) with no answers
+    - Run question agent to pick first question (or stop)
+    - Persist session in store
+    """
+    try:
+        client = _get_client()
+        session_id = _guided_loop_store.new_session_id()
+
+        analysis_agent = AnalysisConfidenceAgent(client)
+        analysis_raw = await analysis_agent.run(
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            answers={},
+        )
+
+        confidence = analysis_raw.get("confidence", {})
+        blocks_raw = {k: v for k, v in analysis_raw.items() if k != "confidence"}
+
+        q_agent = QuestionLoopAgent(client)
+        q_raw = await q_agent.run(
+            user_input=req.user_input,
+            answers={},
+            analysis_blocks=blocks_raw,
+            confidence=confidence,
+            question_count=0,
+            max_questions=req.max_questions,
+        )
+
+        state = GuidedLoopSessionState(
+            session_id=session_id,
+            user_input=req.user_input,
+            scope=req.scope,
+            answers={},
+            question_count=0,
+            max_questions=req.max_questions,
+            analysis_blocks=GuidedAnalysisBlocks(**blocks_raw),
+            confidence=AnalysisConfidence(**confidence) if confidence else None,
+            status="questioning",
+        )
+
+        if q_raw.get("action") == "stop":
+            state.status = "complete"
+            _guided_loop_store.set(session_id, state.model_dump())
+            return GuidedLoopStartResponse(
+                session_id=session_id,
+                status="complete",
+                analysis_blocks=state.analysis_blocks,
+                confidence=state.confidence,
+            )
+
+        question = q_raw.get("question") or {}
+        _guided_loop_store.set(session_id, state.model_dump())
+        return GuidedLoopStartResponse(
+            session_id=session_id,
+            status="questioning",
+            question=GuidedLoopQuestion(**question),
+            question_number=1,
+            analysis_blocks=state.analysis_blocks,
+            confidence=state.confidence,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=500, detail=f"Guided loop start validation failed: {exc}") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Guided loop start failed: {exc}") from exc
+
+
+@router.post("/guided/loop/answer", response_model=GuidedLoopAnswerResponse)
+async def guided_loop_answer(req: GuidedLoopAnswerRequest):
+    """
+    Submit one answer:
+    - Update session answers
+    - Run analysis (7 blocks + confidence)
+    - Run question agent (stop vs ask next)
+    - Persist session
+    """
+    try:
+        raw_state = _guided_loop_store.get(req.session_id)
+        if not raw_state:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        state = GuidedLoopSessionState(**raw_state)
+        if state.status == "complete":
+            return GuidedLoopAnswerResponse(
+                session_id=state.session_id,
+                status="complete",
+                analysis_blocks=state.analysis_blocks,
+                confidence=state.confidence,
+            )
+
+        # update
+        state.answers[req.field] = req.value
+        state.question_count += 1
+
+        client = _get_client()
+        analysis_agent = AnalysisConfidenceAgent(client)
+        analysis_raw = await analysis_agent.run(
+            user_input=state.user_input,
+            scope=state.scope.model_dump(),
+            answers=state.answers,
+        )
+        confidence = analysis_raw.get("confidence", {})
+        blocks_raw = {k: v for k, v in analysis_raw.items() if k != "confidence"}
+        state.analysis_blocks = GuidedAnalysisBlocks(**blocks_raw)
+        state.confidence = AnalysisConfidence(**confidence) if confidence else None
+
+        q_agent = QuestionLoopAgent(client)
+        q_raw = await q_agent.run(
+            user_input=state.user_input,
+            answers=state.answers,
+            analysis_blocks=blocks_raw,
+            confidence=confidence,
+            question_count=state.question_count,
+            max_questions=state.max_questions,
+        )
+
+        if q_raw.get("action") == "stop":
+            state.status = "complete"
+            _guided_loop_store.set(state.session_id, state.model_dump())
+            return GuidedLoopAnswerResponse(
+                session_id=state.session_id,
+                status="complete",
+                analysis_blocks=state.analysis_blocks,
+                confidence=state.confidence,
+            )
+
+        question = q_raw.get("question") or {}
+        _guided_loop_store.set(state.session_id, state.model_dump())
+        return GuidedLoopAnswerResponse(
+            session_id=state.session_id,
+            status="questioning",
+            question=GuidedLoopQuestion(**question),
+            question_number=state.question_count + 1,
+            analysis_blocks=state.analysis_blocks,
+            confidence=state.confidence,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=500, detail=f"Guided loop answer validation failed: {exc}") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Guided loop answer failed: {exc}") from exc
+
+
+@router.get("/guided/loop/session/{session_id}", response_model=GuidedLoopSessionState)
+async def guided_loop_session(session_id: str):
+    raw_state = _guided_loop_store.get(session_id)
+    if not raw_state:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return GuidedLoopSessionState(**raw_state)
+
+
+@router.post("/guided/analysis", response_model=GuidedAnalysisBlocks)
+async def guided_analysis(req: GuidedAnalysisRequest):
+    """
+    Generate the 7-block analysis JSON (filled enum values) from user input,
+    scope, and any previously answered guided questions.
+    """
+    try:
+        client = _get_client()
+        return await _validated_analysis_blocks(
+            client,
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            previous_answers=req.answers,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Guided analysis failed: {exc}") from exc
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
-def _build_solution(template_result: dict, reasoning_result: dict, requirements: dict) -> SolutionOutput:
+def _build_solution(
+    template_result: dict,
+    reasoning_result: dict,
+    requirements: dict,
+    analysis_blocks: GuidedAnalysisBlocks | None = None,
+) -> SolutionOutput:
     summary_data = reasoning_result.get("summary", {})
     reasoning_data = reasoning_result.get("reasoning", {})
     cy_raw = template_result.get("cytoscape_elements", {"nodes": [], "edges": []})
@@ -199,7 +486,106 @@ def _build_solution(template_result: dict, reasoning_result: dict, requirements:
             edges=cy_raw.get("edges", []),
         ),
         requirements=BusinessRequirements(**requirements),
+        analysis_blocks=analysis_blocks,
     )
+
+
+def _analysis_blocks_to_requirements(blocks: GuidedAnalysisBlocks, scope: dict) -> dict:
+    b1 = blocks.analysis_block_1_application_identity
+    b2 = blocks.analysis_block_2_architecture_pattern
+    b4 = blocks.analysis_block_4_traffic_and_scale
+    b5 = blocks.analysis_block_5_availability
+    b6 = blocks.analysis_block_6_access_and_security
+
+    users_map = {
+        "under_100": 50,
+        "100_to_1k": 500,
+        "1k_to_10k": 5000,
+        "10k_to_100k": 50000,
+        "100k_plus": 200000,
+    }
+    users = users_map.get(b4.concurrent_users_band, 1000)
+
+    uptime_map = {"best_effort": "99%", "99.9": "99.9%", "99.99": "99.99%"}
+    uptime = uptime_map.get(b5.sla_target, "99.9%")
+
+    classification = "internal"
+    if b6.handles_sensitive_data or any(x in (b6.sensitive_data_types or []) for x in ("payments", "health_records", "financial_data", "pii")):
+        classification = "confidential"
+
+    tier = "growing"
+    if b7 := blocks.analysis_block_7_resource_sizing_and_budget:
+        if (b7.monthly_budget_ceiling_usd or 0) >= 10000:
+            tier = "enterprise"
+        elif (b7.monthly_budget_ceiling_usd or 0) > 0 and (b7.monthly_budget_ceiling_usd or 0) < 500:
+            tier = "startup"
+
+    return {
+        "app_type": b1.app_type,
+        "scale": {
+            "concurrent_users": int(users),
+            "requests_per_second": max(1, int(users) // 10),
+            "storage_tb": 0.1,
+            "growth_rate": "growing" if b4.expected_growth else "steady",
+        },
+        "availability": {
+            "uptime_requirement": uptime,
+            "rto_minutes": 15 if b5.sla_target == "99.99" else 60,
+            "rpo_minutes": 30,
+            "multi_az": bool(b5.multi_az),
+        },
+        "network": {
+            "internet_facing": bool(b6.public_facing),
+            "cdn_required": bool(b6.public_facing and users > 1000),
+            "multi_region": bool(b5.disaster_recovery_required),
+        },
+        "security": {
+            "authentication": True,
+            "data_classification": classification,
+            "compliance": [c for c in (b6.compliance_requirements or []) if c != "none"],
+        },
+        "budget": {
+            "tier": tier,
+            "monthly_estimate_usd": int(blocks.analysis_block_7_resource_sizing_and_budget.monthly_budget_ceiling_usd or 0),
+            "cost_optimization": "balanced",
+        },
+        "stack": scope.get("stack", []),
+        "derived_requirements": [
+            f"Derived from 7-block analysis (pattern={b2.pattern}, scale={b4.resolved_scale}, sla={b5.sla_target})"
+        ],
+    }
+
+
+async def _validated_analysis_blocks(
+    client: ClaudeClient,
+    *,
+    user_input: str,
+    scope: dict,
+    previous_answers: dict,
+    max_attempts: int = 2,
+) -> GuidedAnalysisBlocks:
+    """
+    Ask the LLM for analysis blocks and validate via Pydantic.
+    If validation fails, retry once with the validation error so the LLM can correct enums/types.
+    This avoids hardcoded fixups while keeping the server resilient.
+    """
+    agent = AnalysisBlocksAgent(client)
+    last_err: Exception | None = None
+    raw: dict = {}
+    for attempt in range(max_attempts):
+        raw = await agent.run(user_input=user_input, scope=scope, previous_answers=previous_answers)
+        try:
+            return GuidedAnalysisBlocks(**raw)
+        except ValidationError as exc:
+            last_err = exc
+            # Ask the model to correct its previous JSON exactly.
+            previous_answers = {
+                **(previous_answers or {}),
+                "_validation_error": str(exc),
+                "_instructions": "Your previous JSON failed schema validation. Output corrected JSON ONLY, using allowed enum values and correct types.",
+                "_previous_json": raw,
+            }
+    raise HTTPException(status_code=500, detail=f"Analysis block validation failed: {last_err}")
 
 
 def _guided_answers_to_requirements(answers: dict, scope: dict) -> dict:
@@ -290,3 +676,5 @@ def _parse_users(raw: str) -> int:
     import re
     nums = re.findall(r"\d+", raw)
     return int(nums[0]) if nums else 1000
+
+

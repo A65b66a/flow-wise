@@ -33,8 +33,16 @@ const useStore = create((set) => ({
   setBlockAnswers: (block, answers) =>
     set((s) => ({ guidedAnswers: { ...s.guidedAnswers, [`block_${block}`]: answers } })),
 
+  smartQuestions: null,
+  setSmartQuestions: (smartQuestions) => set({ smartQuestions }),
+  smartAnswers: {},
+  setSmartAnswers: (smartAnswers) => set({ smartAnswers }),
+
   solution: null,
   setSolution: (solution) => set({ solution }),
+
+  analysisBlocks: null,
+  setAnalysisBlocks: (analysisBlocks) => set({ analysisBlocks }),
 
   loading: false,
   setLoading: (loading) => set({ loading }),
@@ -54,7 +62,10 @@ const useStore = create((set) => ({
       currentBlock: 1,
       guidedQuestions: {},
       guidedAnswers: {},
+      smartQuestions: null,
+      smartAnswers: {},
       solution: null,
+      analysisBlocks: null,
       loading: false,
       error: null,
     }),

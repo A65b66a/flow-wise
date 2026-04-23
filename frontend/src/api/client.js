@@ -50,9 +50,25 @@ export const api = {
       })
       .then((r) => r.data),
 
+  guidedAnalysis: (userInput, scope, answers) =>
+    http.post('/guided/analysis', { user_input: userInput, scope, answers: answers || {} }).then((r) => r.data),
+
   guidedComplete: (userInput, scope, answers) =>
     http
       .post('/guided/complete', { user_input: userInput, scope, answers })
+      .then((r) => r.data),
+
+  conversationalMessage: (userInput, scope, conversation, message) =>
+    http
+      .post('/guided/conversation/message', { user_input: userInput, scope, conversation, message })
+      .then((r) => r.data),
+
+  smartGuidedQuestions: (userInput, scope) =>
+    http.post('/guided/smart/questions', { user_input: userInput, scope }).then((r) => r.data),
+
+  smartGuidedComplete: (userInput, scope, answers) =>
+    http
+      .post('/guided/smart/complete', { user_input: userInput, scope, answers })
       .then((r) => r.data),
 
   getTemplates: () => http.get('/templates').then((r) => r.data),

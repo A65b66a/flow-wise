@@ -11,7 +11,7 @@ export default function AutoModeScreen() {
   const {
     userInput, scopeResult, autoPilotInit,
     quickInputs, setQuickInputs,
-    setSolution, setScreen, setLoading, setError, loading,
+    setSolution, setAnalysisBlocks, setScreen, setLoading, setError, loading,
   } = useStore()
 
   const [localInputs, setLocalInputs] = useState(quickInputs)
@@ -30,6 +30,9 @@ export default function AutoModeScreen() {
     setLoading(true)
     setError(null)
     try {
+      // Generate 7-block analysis JSON for display in SolutionOutput.
+      const analysis = await api.guidedAnalysis(userInput, scopeResult, {})
+      setAnalysisBlocks(analysis)
       const solution = await api.autoComplete(userInput, scopeResult, autoPilotInit, localInputs)
       setSolution(solution)
       setScreen('solution')

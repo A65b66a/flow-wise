@@ -9,12 +9,14 @@ const TABS = [
   { id: 'summary', label: 'Architecture Summary', icon: LayoutGrid },
   { id: 'reasoning', label: 'Why This Architecture', icon: Brain },
   { id: 'json', label: 'JSON Configuration', icon: Code },
+  { id: 'analysis', label: '7-Block Analysis', icon: Code },
 ]
 
 export default function SolutionOutput() {
-  const { solution, reset } = useStore()
+  const { solution, analysisBlocks, reset } = useStore()
   const [activeTab, setActiveTab] = useState('summary')
   const [jsonExpanded, setJsonExpanded] = useState(false)
+  const [analysisExpanded, setAnalysisExpanded] = useState(false)
 
   if (!solution) {
     return (
@@ -90,6 +92,13 @@ export default function SolutionOutput() {
             solution={solution}
             expanded={jsonExpanded}
             onToggle={() => setJsonExpanded((e) => !e)}
+          />
+        )}
+        {activeTab === 'analysis' && (
+          <AnalysisPanel
+            analysis={solution?.analysis_blocks || analysisBlocks}
+            expanded={analysisExpanded}
+            onToggle={() => setAnalysisExpanded((e) => !e)}
           />
         )}
       </div>
@@ -256,6 +265,57 @@ function JsonPanel({ solution, expanded, onToggle }) {
       {!expanded && jsonStr.length > 1200 && (
         <button onClick={onToggle} className="text-xs text-primary hover:text-primary-light transition-colors">
           Show full configuration ({jsonStr.length.toLocaleString()} chars)…
+        </button>
+      )}
+    </div>
+  )
+}
+
+function AnalysisPanel({ analysis, expanded, onToggle }) {
+  const [copied, setCopied] = useState(false)
+  const jsonStr = JSON.stringify(analysis || {}, null, 2)
+  const preview = jsonExpanded(expanded, jsonStr)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(jsonStr)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (!analysis) {
+    return (
+      <div className="p-4 rounded-xl bg-card border border-border text-sm text-muted">
+        No analysis blocks were generated for this run.
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-4 rounded-xl bg-card border border-border space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-semibold text-muted uppercase tracking-wider">7-Block Analysis JSON</h4>
+        <div className="flex gap-2">
+          <button
+            onClick={handleCopy}
+            className="text-xs text-primary hover:text-primary-light transition-colors"
+          >
+            {copied ? '✓ Copied' : 'Copy'}
+          </button>
+          <button
+            onClick={onToggle}
+            className="flex items-center gap-1 text-xs text-muted hover:text-slate-300 transition-colors"
+          >
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            {expanded ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-auto max-h-96 rounded-lg bg-surface p-3">
+        <pre className="json-code">{preview}</pre>
+      </div>
+      {!expanded && jsonStr.length > 1200 && (
+        <button onClick={onToggle} className="text-xs text-primary hover:text-primary-light transition-colors">
+          Show full analysis ({jsonStr.length.toLocaleString()} chars)…
         </button>
       )}
     </div>

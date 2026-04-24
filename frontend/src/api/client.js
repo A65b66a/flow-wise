@@ -71,5 +71,18 @@ export const api = {
       .post('/guided/smart/complete', { user_input: userInput, scope, answers })
       .then((r) => r.data),
 
+  guidedLoopStart: (userInput, scope, maxQuestions = 10) =>
+    http
+      .post('/guided/loop/start', { user_input: userInput, scope, max_questions: maxQuestions })
+      .then((r) => r.data),
+
+  guidedLoopAnswer: (sessionId, field, value) =>
+    http
+      .post('/guided/loop/answer', { session_id: sessionId, field, value })
+      .then((r) => r.data),
+
+  guidedLoopSession: (sessionId) =>
+    http.get(`/guided/loop/session/${sessionId}`).then((r) => r.data),
+
   getTemplates: () => http.get('/templates').then((r) => r.data),
 }

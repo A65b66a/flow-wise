@@ -3,8 +3,6 @@ import { ArrowRight, Zap, Layers, Settings } from 'lucide-react'
 import { api } from '../api/client'
 import useStore from '../store/useStore'
 import LoadingSpinner from './shared/LoadingSpinner'
-import ErrorBanner from './shared/ErrorBanner'
-import { validateContent } from '../utils/contentModeration'
 
 const EXAMPLES = [
   'I want to build an e-commerce platform for 50,000 users with a React frontend and Node.js backend',
@@ -15,24 +13,21 @@ const EXAMPLES = [
 
 export default function EntryScreen() {
   const [text, setText] = useState('')
-  const { setUserInput, setScopeResult, setModeResult, setScreen, setLoading, setError, loading, error } =
+  const { setUserInput, setScopeResult, setModeResult, setScreen, setLoading, setError, loading } =
     useStore()
 
   const handleAnalyze = async () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    
-    // Validate content before making API call
-    const validation = validateContent(trimmed)
-    if (!validation.allowed) {
-      setError(validation.message)
-      return
-    }
-    
+
     setLoading(true)
     setError(null)
     try {
       const scope = await api.analyzeScope(trimmed)
+      if (scope.status === 'failed') {
+        setError(scope.reasoning?.[0] || scope.message)
+        return
+      }
       const mode = await api.selectMode(trimmed, scope)
       setUserInput(trimmed)
       setScopeResult(scope)
@@ -65,8 +60,6 @@ export default function EntryScreen() {
       </div>
 
       <div className="w-full max-w-2xl space-y-3">
-        {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
-        
         <div className="relative">
           <textarea
             value={text}

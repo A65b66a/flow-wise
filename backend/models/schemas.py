@@ -8,12 +8,14 @@ class ScopeRequest(BaseModel):
 
 
 class ScopeResponse(BaseModel):
-    app_type: str
-    stack: list[str]
-    scale_hint: str
-    domain: str
-    confidence_score: float
-    detected_signals: list[str]
+    status: str = "proceed"  # "proceed" | "failed"
+    message: str = ""
+    app_type: str = "web"
+    stack: list[str] = Field(default_factory=list)
+    scale_hint: str = "medium"
+    domain: str = "general"
+    confidence_score: float = 0.0
+    reasoning: list[str] = Field(default_factory=list)
 
 
 # ── Mode ───────────────────────────────────────────────────────────────────
@@ -150,6 +152,51 @@ class BusinessRequirements(BaseModel):
     budget: BudgetSpec = Field(default_factory=BudgetSpec)
     stack: list[str] = Field(default_factory=list)
     derived_requirements: list[str] = Field(default_factory=list)
+
+
+# ── Expert Mode ────────────────────────────────────────────────────────────
+class ExpertQuestion(BaseModel):
+    id: str
+    text: str
+    why: str
+    type: str  # text | select | multiselect | boolean
+    placeholder: str = ""
+    options: list[str] = Field(default_factory=list)
+    block_ref: str = ""
+
+
+class ExpertQAEntry(BaseModel):
+    question: str
+    answer: Any
+
+
+class ExpertTurn(BaseModel):
+    round: int
+    qa_pairs: list[ExpertQAEntry] = Field(default_factory=list)
+
+
+class ExpertQuestionsRequest(BaseModel):
+    user_input: str
+    scope: ScopeResponse
+    round: int = 1
+    conversation_history: list[ExpertTurn] = Field(default_factory=list)
+    analysis_blocks: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExpertQuestionsResponse(BaseModel):
+    round: int
+    questions: list[ExpertQuestion]
+    analysis_blocks: dict[str, Any]
+    is_complete: bool = False
+    blocks_filled_count: int = 0
+    missing_critical_fields: list[str] = Field(default_factory=list)
+    source: str = "llm"  # "llm" | "fallback"
+
+
+class ExpertCompleteRequest(BaseModel):
+    user_input: str
+    scope: ScopeResponse
+    analysis_blocks: dict[str, Any]
 
 
 # ── Solution Output ────────────────────────────────────────────────────────

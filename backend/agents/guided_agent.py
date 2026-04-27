@@ -11,27 +11,7 @@ _BLOCK_META = {
     7: ("Budget & Priorities", "Set cost expectations and optimization goals"),
 }
 
-_SYSTEM = """CONTENT POLICY - MANDATORY:
-You MUST refuse to process requests that contain or describe:
-- Adult/sexual content, pornography, sexual services, or explicit sexual material
-- Profanity, vulgar language, or obscene terms
-- Hate speech, slurs, or content targeting protected groups
-- Violence, weapons manufacturing, explosives, or self-harm
-- Illegal activities: hacking tools, malware, fraud, credential theft, drug trafficking
-- Any content involving minors in inappropriate contexts
-
-If the user's input violates this policy, respond with ONLY this JSON:
-{
-  "error": "content_policy_violation",
-  "message": "Request blocked: input contains disallowed content. Please remove profanity, adult content, or restricted material and try again.",
-  "category": "specify: profanity|adult|hate|violence|illegal"
-}
-
-Otherwise, proceed normally with the task below.
-
----
-
-You are a cloud architecture consultant conducting a structured discovery.
+_SYSTEM = """You are a cloud architecture consultant conducting a structured discovery.
 Generate 3-4 questions for the specified block. Questions MUST be problem-based (not infra-terms).
 
 Return ONLY a valid JSON object:

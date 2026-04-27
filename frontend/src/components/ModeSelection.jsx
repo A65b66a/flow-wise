@@ -63,7 +63,7 @@ export default function ModeSelection() {
     } else if (mode === 'GUIDED') {
       setScreen('guided-mode')
     } else {
-      setScreen('guided-mode')
+      setScreen('expert-mode')
     }
   }
 
@@ -83,7 +83,7 @@ export default function ModeSelection() {
 
       {scopeResult && (
         <div className="p-4 rounded-xl bg-card border border-border">
-          <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Detected Signals</p>
+          <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Scope Analysis</p>
           <div className="flex flex-wrap gap-2">
             <Chip label={`Type: ${scopeResult.app_type}`} color="indigo" />
             <Chip label={`Scale: ${scopeResult.scale_hint}`} color="blue" />
@@ -91,7 +91,7 @@ export default function ModeSelection() {
             {scopeResult.stack?.map((tech) => (
               <Chip key={tech} label={tech} color="gray" />
             ))}
-            {scopeResult.detected_signals?.slice(0, 4).map((sig) => (
+            {scopeResult.reasoning?.slice(0, 4).map((sig) => (
               <Chip key={sig} label={sig} color="green" small />
             ))}
           </div>

@@ -55,5 +55,25 @@ export const api = {
       .post('/guided/complete', { user_input: userInput, scope, answers })
       .then((r) => r.data),
 
+  expertQuestions: (userInput, scope, round, conversationHistory, analysisBlocks) =>
+    http
+      .post('/expert/questions', {
+        user_input: userInput,
+        scope,
+        round,
+        conversation_history: conversationHistory || [],
+        analysis_blocks: analysisBlocks || {},
+      })
+      .then((r) => r.data),
+
+  expertComplete: (userInput, scope, analysisBlocks) =>
+    http
+      .post('/expert/complete', {
+        user_input: userInput,
+        scope,
+        analysis_blocks: analysisBlocks,
+      })
+      .then((r) => r.data),
+
   getTemplates: () => http.get('/templates').then((r) => r.data),
 }

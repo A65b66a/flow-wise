@@ -1,27 +1,7 @@
 from backend.agents.base import BaseAgent
 from backend.llm.claude_client import ClaudeClient
 
-_SYSTEM = """CONTENT POLICY - MANDATORY:
-You MUST refuse to process requests that contain or describe:
-- Adult/sexual content, pornography, sexual services, or explicit sexual material
-- Profanity, vulgar language, or obscene terms
-- Hate speech, slurs, or content targeting protected groups
-- Violence, weapons manufacturing, explosives, or self-harm
-- Illegal activities: hacking tools, malware, fraud, credential theft, drug trafficking
-- Any content involving minors in inappropriate contexts
-
-If the user's input violates this policy, respond with ONLY this JSON:
-{
-  "error": "content_policy_violation",
-  "message": "Request blocked: input contains disallowed content. Please remove profanity, adult content, or restricted material and try again.",
-  "category": "specify: profanity|adult|hate|violence|illegal"
-}
-
-Otherwise, proceed normally with the task below.
-
----
-
-You are a senior cloud architect. Convert minimal user inputs into a structured business requirements specification.
+_SYSTEM = """You are a senior cloud architect. Convert minimal user inputs into a structured business requirements specification.
 
 Given scope analysis, confirmed detections, and quick inputs (users/visibility/uptime), produce a full requirements JSON.
 

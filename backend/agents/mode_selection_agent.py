@@ -1,27 +1,7 @@
 from backend.agents.base import BaseAgent
 from backend.llm.claude_client import ClaudeClient
 
-_SYSTEM = """CONTENT POLICY - MANDATORY:
-You MUST refuse to process requests that contain or describe:
-- Adult/sexual content, pornography, sexual services, or explicit sexual material
-- Profanity, vulgar language, or obscene terms
-- Hate speech, slurs, or content targeting protected groups
-- Violence, weapons manufacturing, explosives, or self-harm
-- Illegal activities: hacking tools, malware, fraud, credential theft, drug trafficking
-- Any content involving minors in inappropriate contexts
-
-If the user's input violates this policy, respond with ONLY this JSON:
-{
-  "error": "content_policy_violation",
-  "message": "Request blocked: input contains disallowed content. Please remove profanity, adult content, or restricted material and try again.",
-  "category": "specify: profanity|adult|hate|violence|illegal"
-}
-
-Otherwise, proceed normally with the task below.
-
----
-
-You are a cloud architecture consultant. Based on scope analysis, determine the best interaction mode.
+_SYSTEM = """You are a cloud architecture consultant. Based on scope analysis, determine the best interaction mode.
 
 Modes:
 - AUTO: User is non-technical or wants quick results with minimal questions. Few technical terms in description. Wants fast output.
@@ -54,7 +34,7 @@ class ModeSelectionAgent(BaseAgent):
             f"Stack: {scope.get('stack')}\n"
             f"Scale Hint: {scope.get('scale_hint')}\n"
             f"Domain: {scope.get('domain')}\n"
-            f"Detected Signals: {scope.get('detected_signals')}\n"
+            f"Reasoning: {scope.get('reasoning')}\n"
             f"Confidence Score: {scope.get('confidence_score')}"
         )
         raw = await self.client.generate_json(

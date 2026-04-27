@@ -3,6 +3,7 @@ import EntryScreen from './components/EntryScreen'
 import ModeSelection from './components/ModeSelection'
 import AutoModeScreen from './components/AutoModeScreen'
 import GuidedModeScreen from './components/GuidedModeScreen'
+import ExpertModeScreen from './components/ExpertModeScreen'
 import SolutionOutput from './components/SolutionOutput'
 import ErrorBanner from './components/shared/ErrorBanner'
 
@@ -11,6 +12,7 @@ const SCREENS = {
   'mode-selection': ModeSelection,
   'auto-mode': AutoModeScreen,
   'guided-mode': GuidedModeScreen,
+  'expert-mode': ExpertModeScreen,
   solution: SolutionOutput,
 }
 

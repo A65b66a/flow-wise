@@ -33,6 +33,25 @@ const useStore = create((set) => ({
   setBlockAnswers: (block, answers) =>
     set((s) => ({ guidedAnswers: { ...s.guidedAnswers, [`block_${block}`]: answers } })),
 
+  expertRound: 1,
+  setExpertRound: (expertRound) => set({ expertRound }),
+
+  expertQuestions: [],
+  setExpertQuestions: (expertQuestions) => set({ expertQuestions }),
+
+  expertConversationHistory: [],
+  addExpertTurn: (turn) =>
+    set((s) => ({ expertConversationHistory: [...s.expertConversationHistory, turn] })),
+
+  expertAnalysisBlocks: {},
+  setExpertAnalysisBlocks: (expertAnalysisBlocks) => set({ expertAnalysisBlocks }),
+
+  expertIsComplete: false,
+  setExpertIsComplete: (expertIsComplete) => set({ expertIsComplete }),
+
+  expertBlocksFilled: 0,
+  setExpertBlocksFilled: (expertBlocksFilled) => set({ expertBlocksFilled }),
+
   solution: null,
   setSolution: (solution) => set({ solution }),
 
@@ -54,6 +73,12 @@ const useStore = create((set) => ({
       currentBlock: 1,
       guidedQuestions: {},
       guidedAnswers: {},
+      expertRound: 1,
+      expertQuestions: [],
+      expertConversationHistory: [],
+      expertAnalysisBlocks: {},
+      expertIsComplete: false,
+      expertBlocksFilled: 0,
       solution: null,
       loading: false,
       error: null,

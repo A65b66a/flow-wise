@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from functools import lru_cache
 
 from backend.models.schemas import (
@@ -8,15 +8,18 @@ from backend.models.schemas import (
     AutoPilotCompleteRequest,
     GuidedBlockRequest, GuidedBlockResponse,
     GuidedCompleteRequest,
+    ExpertQuestionsRequest, ExpertQuestionsResponse,
+    ExpertCompleteRequest,
     SolutionOutput, ArchitectureSummary, ReasoningLog, CytoscapeElements,
     BusinessRequirements,
 )
 from backend.llm.claude_client import ClaudeClient
-from backend.agents.scope_agent import ScopeAgent
+from backend.agents.scope_agent import ScopeIdentificationAgent
 from backend.agents.mode_selection_agent import ModeSelectionAgent
 from backend.agents.auto_pilot_agent import AutoPilotAgent
 from backend.agents.business_requirement_agent import BusinessRequirementAgent
 from backend.agents.guided_agent import GuidedAgent
+from backend.agents.expert_agent import ExpertAgent
 from backend.agents.template_agent import TemplateAgent
 from backend.agents.reasoning_agent import ReasoningAgent
 
@@ -50,15 +53,8 @@ async def health():
 async def analyze_scope(req: ScopeRequest):
     try:
         client = _get_client()
-        agent = ScopeAgent(client)
+        agent = ScopeIdentificationAgent(client)
         result = await agent.run(user_input=req.user_input)
-        
-        # Check if Claude flagged content policy violation
-        if result.get("error") == "content_policy_violation":
-            raise HTTPException(
-                status_code=422,
-                detail=result.get("message", "Input blocked: disallowed content detected.")
-            )
         
         return ScopeResponse(**result)
     except HTTPException:
@@ -78,13 +74,12 @@ async def select_mode(req: ModeRequest):
             scope=req.scope.model_dump(),
         )
         
-        # Check if Claude flagged content policy violation
-        if result.get("error") == "content_policy_violation":
+        if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
-        
+
         return ModeResponse(**result)
     except HTTPException:
         raise
@@ -103,13 +98,12 @@ async def auto_init(req: AutoPilotInitRequest):
             scope=req.scope.model_dump(),
         )
         
-        # Check if Claude flagged content policy violation
-        if result.get("error") == "content_policy_violation":
+        if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
-        
+
         return AutoPilotInitResponse(**result)
     except HTTPException:
         raise
@@ -130,8 +124,7 @@ async def auto_complete(req: AutoPilotCompleteRequest):
             quick_inputs=req.quick_inputs.model_dump(),
         )
         
-        # Check if Claude flagged content policy violation
-        if isinstance(requirements, dict) and requirements.get("error") == "content_policy_violation":
+        if isinstance(requirements, dict) and requirements.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=requirements.get("message", "Input blocked: disallowed content detected.")
@@ -168,13 +161,12 @@ async def guided_questions(block: int, req: GuidedBlockRequest):
             previous_answers=req.previous_answers,
         )
         
-        # Check if Claude flagged content policy violation
-        if result.get("error") == "content_policy_violation":
+        if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
-        
+
         return GuidedBlockResponse(**result)
     except HTTPException:
         raise
@@ -208,6 +200,48 @@ async def guided_complete(req: GuidedCompleteRequest):
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Guided complete failed: {exc}") from exc
+
+
+# ── Expert Mode ─────────────────────────────────────────────────────────────
+@router.post("/expert/questions", response_model=ExpertQuestionsResponse)
+async def expert_questions(req: ExpertQuestionsRequest):
+    try:
+        client = _get_client()
+        agent = ExpertAgent(client)
+        result = await agent.run(
+            user_input=req.user_input,
+            scope=req.scope.model_dump(),
+            round=req.round,
+            conversation_history=[t.model_dump() for t in req.conversation_history],
+            analysis_blocks=req.analysis_blocks,
+        )
+        return ExpertQuestionsResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Expert questions failed: {exc}") from exc
+
+
+@router.post("/expert/complete", response_model=SolutionOutput)
+async def expert_complete(req: ExpertCompleteRequest):
+    try:
+        client = _get_client()
+        requirements = _expert_blocks_to_requirements(req.analysis_blocks, req.scope.model_dump())
+
+        tmpl_agent = TemplateAgent(client)
+        template_result = await tmpl_agent.run(requirements=requirements)
+
+        rsn_agent = ReasoningAgent(client)
+        reasoning_result = await rsn_agent.run(
+            template_result=template_result,
+            requirements=requirements,
+        )
+
+        return _build_solution(template_result, reasoning_result, requirements)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Expert complete failed: {exc}") from exc
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -311,6 +345,102 @@ def _guided_answers_to_requirements(answers: dict, scope: dict) -> dict:
         },
         "stack": scope.get("stack", []),
         "derived_requirements": [f"Derived from guided interview with {len(answers)} answers"],
+    }
+
+
+def _expert_blocks_to_requirements(blocks: dict, scope: dict) -> dict:
+    b1 = blocks.get("analysis_block_1_application_identity", {})
+    b2 = blocks.get("analysis_block_2_architecture_pattern", {})
+    b4 = blocks.get("analysis_block_4_traffic_and_scale", {})
+    b5 = blocks.get("analysis_block_5_availability", {})
+    b6 = blocks.get("analysis_block_6_access_and_security", {})
+    b7 = blocks.get("analysis_block_7_resource_sizing_and_budget", {})
+
+    def _is_true(val) -> bool:
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "yes", "1")
+
+    users_band_map = {
+        "under_100": 50,
+        "100_to_1k": 500,
+        "1k_to_10k": 5000,
+        "10k_to_100k": 50000,
+        "100k_plus": 200000,
+    }
+    users_num = users_band_map.get(b4.get("concurrent_users_band", "100_to_1k"), 500)
+
+    storage_map = {
+        "small_under_10gb": 0.01,
+        "medium_10_to_500gb": 0.25,
+        "large_500gb_plus": 1.0,
+    }
+    storage_tb = storage_map.get(b4.get("data_storage_band", "medium_10_to_500gb"), 0.25)
+
+    sla_map = {"best_effort": "99%", "99.9": "99.9%", "99.99": "99.99%"}
+    sla = str(b5.get("sla_target", "99.9"))
+    uptime = sla_map.get(sla, "99.9%")
+
+    multi_az = _is_true(b5.get("multi_az")) or sla == "99.99"
+    public_facing = _is_true(b6.get("public_facing", True))
+
+    compliance_raw = b6.get("compliance_requirements", [])
+    if isinstance(compliance_raw, str):
+        compliance_raw = [compliance_raw]
+    compliance = [c for c in compliance_raw if c and c not in ("none", "None")]
+
+    handles_sensitive = _is_true(b6.get("handles_sensitive_data"))
+
+    budget_raw = b7.get("monthly_budget_ceiling_usd")
+    try:
+        budget_usd = int(float(str(budget_raw))) if budget_raw not in (None, "null", "") else 1000
+    except (ValueError, TypeError):
+        budget_usd = 1000
+
+    tier = "startup" if budget_usd < 500 else "growing" if budget_usd < 5000 else "enterprise"
+
+    stack_parts = [
+        b1.get("language"), b1.get("framework"),
+        b1.get("frontend_framework"), b1.get("database_engine"),
+    ]
+    stack = [s for s in stack_parts if s and s not in ("null", "none", None)]
+    if not stack:
+        stack = scope.get("stack", [])
+
+    return {
+        "app_type": b1.get("app_type", scope.get("app_type", "web_application")),
+        "scale": {
+            "concurrent_users": users_num,
+            "requests_per_second": max(1, users_num // 10),
+            "storage_tb": storage_tb,
+            "growth_rate": "growing" if _is_true(b4.get("expected_growth")) else "steady",
+        },
+        "availability": {
+            "uptime_requirement": uptime,
+            "rto_minutes": 15 if sla == "99.99" else 60,
+            "rpo_minutes": 30 if sla == "99.99" else 60,
+            "multi_az": multi_az,
+        },
+        "network": {
+            "internet_facing": public_facing,
+            "cdn_required": public_facing and users_num > 1000,
+            "multi_region": _is_true(b5.get("disaster_recovery_required")),
+        },
+        "security": {
+            "authentication": True,
+            "data_classification": "confidential" if handles_sensitive else "internal",
+            "compliance": compliance,
+        },
+        "budget": {
+            "tier": tier,
+            "monthly_estimate_usd": budget_usd,
+            "cost_optimization": "balanced",
+        },
+        "stack": stack,
+        "derived_requirements": [
+            f"Expert mode: {b2.get('pattern', 'three_tier')} architecture",
+            f"Environment: {b7.get('environment', 'production')}",
+        ],
     }
 
 

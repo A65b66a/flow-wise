@@ -16,10 +16,12 @@ class ClaudeClient:
         system_prompt: str,
         user_message: str,
         max_tokens: int = 2048,
+        temperature: float = 1.0,
     ) -> str:
         message = await self._client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
+            temperature=temperature,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -35,5 +37,6 @@ class ClaudeClient:
             user_message
             + "\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown, no explanation, no code fences."
         )
-        text = await self.generate(system_prompt, full_prompt, max_tokens)
+        # temperature=0 for deterministic, consistent structured output
+        text = await self.generate(system_prompt, full_prompt, max_tokens, temperature=0)
         return extract_json(text)

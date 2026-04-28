@@ -1,5 +1,17 @@
 from pydantic import BaseModel, Field
-from typing import Any
+from typing import Any, Generic, Optional, TypeVar
+
+T = TypeVar('T')
+
+
+# ── Base Response ───────────────────────────────────────────────────────────
+class BaseResponse(BaseModel, Generic[T]):
+    success: bool
+    message: str
+    data: Optional[T] = None
+    error_code: Optional[str] = None
+    type: Optional[str] = None
+    details: Optional[dict] = None
 
 
 # ── Scope ──────────────────────────────────────────────────────────────────

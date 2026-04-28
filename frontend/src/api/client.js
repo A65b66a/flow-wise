@@ -18,17 +18,30 @@ http.interceptors.response.use(
   }
 )
 
+// Unwraps BaseResponse envelope { success, message, data, error_code, type, details }
+const unwrap = (r) => {
+  const body = r.data
+  if (!body) throw new Error('Empty response from server')
+  // New BaseResponse format
+  if ('success' in body) {
+    if (!body.success) throw new Error(body.message || 'Request failed')
+    return body.data
+  }
+  // Passthrough for any non-wrapped response
+  return body
+}
+
 export const api = {
-  health: () => http.get('/health'),
+  health: () => http.get('/health').then(unwrap),
 
   analyzeScope: (userInput) =>
-    http.post('/scope', { user_input: userInput }).then((r) => r.data),
+    http.post('/scope', { user_input: userInput }).then(unwrap),
 
   selectMode: (userInput, scope) =>
-    http.post('/mode', { user_input: userInput, scope }).then((r) => r.data),
+    http.post('/mode', { user_input: userInput, scope }).then(unwrap),
 
   autoInit: (userInput, scope) =>
-    http.post('/auto/init', { user_input: userInput, scope }).then((r) => r.data),
+    http.post('/auto/init', { user_input: userInput, scope }).then(unwrap),
 
   autoComplete: (userInput, scope, autoPilotInit, quickInputs) =>
     http
@@ -38,7 +51,7 @@ export const api = {
         auto_pilot_init: autoPilotInit,
         quick_inputs: quickInputs,
       })
-      .then((r) => r.data),
+      .then(unwrap),
 
   guidedQuestions: (block, userInput, scope, previousAnswers) =>
     http
@@ -48,12 +61,12 @@ export const api = {
         scope,
         previous_answers: previousAnswers || {},
       })
-      .then((r) => r.data),
+      .then(unwrap),
 
   guidedComplete: (userInput, scope, answers) =>
     http
       .post('/guided/complete', { user_input: userInput, scope, answers })
-      .then((r) => r.data),
+      .then(unwrap),
 
   expertQuestions: (userInput, scope, round, conversationHistory, analysisBlocks) =>
     http
@@ -64,7 +77,7 @@ export const api = {
         conversation_history: conversationHistory || [],
         analysis_blocks: analysisBlocks || {},
       })
-      .then((r) => r.data),
+      .then(unwrap),
 
   expertComplete: (userInput, scope, analysisBlocks) =>
     http
@@ -73,7 +86,7 @@ export const api = {
         scope,
         analysis_blocks: analysisBlocks,
       })
-      .then((r) => r.data),
+      .then(unwrap),
 
-  getTemplates: () => http.get('/templates').then((r) => r.data),
+  getTemplates: () => http.get('/templates').then(unwrap),
 }

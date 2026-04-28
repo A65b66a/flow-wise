@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from functools import lru_cache
 
 from backend.models.schemas import (
+    BaseResponse,
     ScopeRequest, ScopeResponse,
     ModeRequest, ModeResponse,
     AutoPilotInitRequest, AutoPilotInitResponse,
@@ -39,24 +40,24 @@ def _get_client():
 
 
 # ── Health ──────────────────────────────────────────────────────────────────
-@router.get("/health")
+@router.get("/health", response_model=BaseResponse[dict])
 async def health():
     from backend.config import CLAUDE_API_KEY
-    return {
-        "status": "ok",
-        "api_key_configured": bool(CLAUDE_API_KEY),
-    }
+    return BaseResponse(
+        success=True,
+        message="Service is healthy",
+        data={"status": "ok", "api_key_configured": bool(CLAUDE_API_KEY)},
+    )
 
 
 # ── Scope ───────────────────────────────────────────────────────────────────
-@router.post("/scope", response_model=ScopeResponse)
+@router.post("/scope", response_model=BaseResponse[ScopeResponse])
 async def analyze_scope(req: ScopeRequest):
     try:
         client = _get_client()
         agent = ScopeIdentificationAgent(client)
         result = await agent.run(user_input=req.user_input)
-        
-        return ScopeResponse(**result)
+        return BaseResponse(success=True, message="Scope analysis complete", data=ScopeResponse(**result))
     except HTTPException:
         raise
     except Exception as exc:
@@ -64,7 +65,7 @@ async def analyze_scope(req: ScopeRequest):
 
 
 # ── Mode ────────────────────────────────────────────────────────────────────
-@router.post("/mode", response_model=ModeResponse)
+@router.post("/mode", response_model=BaseResponse[ModeResponse])
 async def select_mode(req: ModeRequest):
     try:
         client = _get_client()
@@ -73,14 +74,14 @@ async def select_mode(req: ModeRequest):
             user_input=req.user_input,
             scope=req.scope.model_dump(),
         )
-        
+
         if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
 
-        return ModeResponse(**result)
+        return BaseResponse(success=True, message="Mode selected", data=ModeResponse(**result))
     except HTTPException:
         raise
     except Exception as exc:
@@ -88,7 +89,7 @@ async def select_mode(req: ModeRequest):
 
 
 # ── Auto Mode ───────────────────────────────────────────────────────────────
-@router.post("/auto/init", response_model=AutoPilotInitResponse)
+@router.post("/auto/init", response_model=BaseResponse[AutoPilotInitResponse])
 async def auto_init(req: AutoPilotInitRequest):
     try:
         client = _get_client()
@@ -97,21 +98,21 @@ async def auto_init(req: AutoPilotInitRequest):
             user_input=req.user_input,
             scope=req.scope.model_dump(),
         )
-        
+
         if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
 
-        return AutoPilotInitResponse(**result)
+        return BaseResponse(success=True, message="Auto-pilot initialized", data=AutoPilotInitResponse(**result))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Auto-pilot init failed: {exc}") from exc
 
 
-@router.post("/auto/complete", response_model=SolutionOutput)
+@router.post("/auto/complete", response_model=BaseResponse[SolutionOutput])
 async def auto_complete(req: AutoPilotCompleteRequest):
     try:
         client = _get_client()
@@ -123,7 +124,7 @@ async def auto_complete(req: AutoPilotCompleteRequest):
             auto_pilot_init=req.auto_pilot_init.model_dump(),
             quick_inputs=req.quick_inputs.model_dump(),
         )
-        
+
         if isinstance(requirements, dict) and requirements.get("error"):
             raise HTTPException(
                 status_code=422,
@@ -139,7 +140,11 @@ async def auto_complete(req: AutoPilotCompleteRequest):
             requirements=requirements,
         )
 
-        return _build_solution(template_result, reasoning_result, requirements)
+        return BaseResponse(
+            success=True,
+            message="Solution generated",
+            data=_build_solution(template_result, reasoning_result, requirements),
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -147,7 +152,7 @@ async def auto_complete(req: AutoPilotCompleteRequest):
 
 
 # ── Guided Mode ─────────────────────────────────────────────────────────────
-@router.post("/guided/questions/{block}", response_model=GuidedBlockResponse)
+@router.post("/guided/questions/{block}", response_model=BaseResponse[GuidedBlockResponse])
 async def guided_questions(block: int, req: GuidedBlockRequest):
     if block < 1 or block > 7:
         raise HTTPException(status_code=400, detail="Block must be between 1 and 7")
@@ -160,21 +165,21 @@ async def guided_questions(block: int, req: GuidedBlockRequest):
             scope=req.scope.model_dump(),
             previous_answers=req.previous_answers,
         )
-        
+
         if result.get("error"):
             raise HTTPException(
                 status_code=422,
                 detail=result.get("message", "Input blocked: disallowed content detected.")
             )
 
-        return GuidedBlockResponse(**result)
+        return BaseResponse(success=True, message=f"Block {block} questions generated", data=GuidedBlockResponse(**result))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Guided block {block} failed: {exc}") from exc
 
 
-@router.post("/guided/complete", response_model=SolutionOutput)
+@router.post("/guided/complete", response_model=BaseResponse[SolutionOutput])
 async def guided_complete(req: GuidedCompleteRequest):
     try:
         client = _get_client()
@@ -195,7 +200,11 @@ async def guided_complete(req: GuidedCompleteRequest):
             requirements=requirements,
         )
 
-        return _build_solution(template_result, reasoning_result, requirements)
+        return BaseResponse(
+            success=True,
+            message="Solution generated",
+            data=_build_solution(template_result, reasoning_result, requirements),
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -203,7 +212,7 @@ async def guided_complete(req: GuidedCompleteRequest):
 
 
 # ── Expert Mode ─────────────────────────────────────────────────────────────
-@router.post("/expert/questions", response_model=ExpertQuestionsResponse)
+@router.post("/expert/questions", response_model=BaseResponse[ExpertQuestionsResponse])
 async def expert_questions(req: ExpertQuestionsRequest):
     try:
         client = _get_client()
@@ -215,14 +224,14 @@ async def expert_questions(req: ExpertQuestionsRequest):
             conversation_history=[t.model_dump() for t in req.conversation_history],
             analysis_blocks=req.analysis_blocks,
         )
-        return ExpertQuestionsResponse(**result)
+        return BaseResponse(success=True, message="Expert questions generated", data=ExpertQuestionsResponse(**result))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Expert questions failed: {exc}") from exc
 
 
-@router.post("/expert/complete", response_model=SolutionOutput)
+@router.post("/expert/complete", response_model=BaseResponse[SolutionOutput])
 async def expert_complete(req: ExpertCompleteRequest):
     try:
         client = _get_client()
@@ -237,7 +246,11 @@ async def expert_complete(req: ExpertCompleteRequest):
             requirements=requirements,
         )
 
-        return _build_solution(template_result, reasoning_result, requirements)
+        return BaseResponse(
+            success=True,
+            message="Solution generated",
+            data=_build_solution(template_result, reasoning_result, requirements),
+        )
     except HTTPException:
         raise
     except Exception as exc:

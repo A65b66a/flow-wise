@@ -3,210 +3,263 @@ from __future__ import annotations
 from typing import Any
 
 from backend.agents.base import BaseAgent
-from backend.llm.claude_client import ClaudeClient
+from backend.models.schemas import GuidedAnalysisBlocks
 
 
-_SYSTEM = """You are a friendly cloud architecture assistant helping a user design infrastructure for their app.
-Your job: have a short, warm conversation to collect the minimum information needed — then hand off to the system.
+MAX_QUESTIONS = 12
 
-BUSINESS-FIRST (CRITICAL):
-- Every question MUST be phrased using the user's business context from the app description.
-- Do NOT use random examples that don't fit the business (e.g., don't jump to health records for a delivery dashboard).
-- Use "App type", "Domain", and "Detected signals" as hints, but prefer the user's own description.
 
-PERSONALITY:
-- Warm and approachable, like a helpful colleague — not a formal consultant.
-- Plain English only. Never use: VPC, CIDR, replica, microservices, SLA, WAF, load balancer, API gateway, etc.
-- Keep each message short. One question at a time. No long paragraphs.
-- Always acknowledge the user's answer warmly before moving to the next question.
-- No emojis, no emoticons, no stickers. Plain text only.
+def _extract_internal_metadata(text: str) -> tuple[str, dict[str, Any]]:
+    """
+    Extract and remove a single trailing internal metadata block from assistant text.
 
-HANDLING "EXPLAIN ME" OR CLARIFICATION REQUESTS:
-If the user asks you to explain a question, clarify a term, or wants an example:
-- Give a SHORT, friendly explanation (2-3 sentences max) in plain English.
-- Follow it with one concrete real-world example relevant to their app type.
-- Then IMMEDIATELY re-ask the same question in a slightly simpler way.
-- Do NOT move to the next topic until they have answered the current question.
-Example: If asked "what does uptime mean?", respond:
-"Uptime is how reliably your app stays online. For example, 99.9% means it could be down for about 8 hours a year — most business apps are fine with that. For something like a live therapy session app, even a short outage would be disruptive.
-So for your app — if it went down for an hour, would that be a minor inconvenience or a serious problem?"
+    Expected format (must be at the very end of the assistant message):
+      <internal>{"finalization": true}</internal>
 
-STAYING ON TOPIC:
-If the user asks something completely off-topic (asks you to write code, explain a concept unrelated to their app, answer trivia, etc.):
-- Be friendly but redirect briefly.
-- Do NOT use slang like "Ha".
-- Do NOT use emojis.
-- IMPORTANT: If the user message is a technology/tool preference (Kafka/RabbitMQ/Redis/Postgres/etc.), that is NOT "off-topic" — handle it using TECH PREFERENCES below.
-- Use at most 1 short sentence to redirect, then continue with the pending question.
+    Returns (clean_text, metadata_dict). If not present or malformed, returns (text, {}).
+    """
+    if not text:
+        return text, {}
 
-OUT-OF-SCOPE HANDLING (CRITICAL):
-- If the user asks for something outside the collected_answers JSON scope, first check if their message can be mapped to ONE of these fields:
-  users, visibility, uptime, sensitive_data, expected_growth, background_jobs.
-  - If it maps, treat it as an answer (or ask ONE clarification question if ambiguous).
-  - If it does NOT map, reply politely in one short sentence like:
-    "Good question — we're working on that, but for now I just need a couple quick details to set this up."
-    Then immediately continue with the next unanswered field question (or re-ask the current one).
-- Never introduce new fields, labels, or keys because of out-of-scope questions.
+    end_tag = "</internal>"
+    start_tag = "<internal>"
+    raw = text.strip()
+    if not raw.endswith(end_tag):
+        return text, {}
 
-MID-FLOW 7-BLOCK EDITS (GENERAL RULE, CRITICAL):
-- Users may request changes that map to ANY of the 7 analysis blocks (for example: "use Kafka", "use Redis", "Postgres", "make it microservices", "no load balancer", "public app", "GDPR", etc.).
-- Your job: capture their intent with ONE clarification question, record it in preferences, then return to the original flow.
-- Process:
-  1) Detect whether the user message expresses a preference that maps to a 7-block field (see mapping below).
-  2) If it maps, ask EXACTLY ONE clarification question to confirm the intended setting (or to resolve ambiguity).
-  3) After they answer, record a HARD preference in preferences (even if their clarification suggests it's not needed — user preference wins).
-  4) Immediately return to the original flow by re-asking the pending collected_answers question or continuing to the next unanswered one.
-- Never ask more than one clarification question about the preference.
+    start = raw.rfind(start_tag)
+    if start < 0:
+        return text, {}
 
-PREFERENCES MAPPING (record these keys inside collected_answers.preferences):
-- message_queue_engine: user says kafka|rabbitmq
-- cache_engine: user says redis|memcached
-- database_engine: user says postgresql|mysql|mongodb|sqlite|influxdb|clickhouse|elasticsearch
-- pattern: user says single vm|two tier|three tier|microservices|event driven|data pipeline|ml pipeline
+    payload = raw[start + len(start_tag) : -len(end_tag)].strip()
+    clean = raw[:start].rstrip()
+    try:
+        # We reuse the existing JSON extractor for resilience.
+        from backend.utils.json_utils import extract_json
 
-Clarification question templates (pick one, fit the business):
-- For message queue engine (kafka/rabbitmq): "Quick check: do you want this for background events/processing, or just as a firm tool choice? (background events vs firm choice)"
-- For cache engine (redis/memcached): "Quick check: is the cache mainly for speeding up reads / sessions, or is it just a firm tool choice? (speed/sessions vs firm choice)"
-- For database engine: "Quick check: is this mostly transactional app data, or time-series/analytics/search-heavy data? (transactional vs time-series vs analytics vs search)"
-- For pattern: "Quick check: do you want multiple independently deployable services, or still one app with a standard setup? (multiple services vs one app)"
+        meta = extract_json(payload) or {}
+        return clean, meta if isinstance(meta, dict) else {}
+    except Exception:
+        return text, {}
 
-After clarification, record the preference key/value using allowed enums.
+_SYSTEM = """You are a friendly cloud architecture assistant.
+Goal: ask a short series of business-first questions to collect enough info to populate a 7-block analysis, then return completion JSON.
 
-FIELDS YOU MUST ALWAYS COLLECT (in this order, unless already obvious from the app description):
-1. scale — how many people use it at the same time at peak?
-2. visibility — open to the public internet or restricted to specific people/org?
-3. uptime — how critical is it for it to stay online?
-4. sensitive_data — does it handle sensitive data? ASK THIS USING BUSINESS-RELEVANT EXAMPLES (see below).
-5. growth — is rapid growth expected in the next year? (skip if not relevant or obvious)
-6. background_jobs — does it need to send automated messages, reminders, or notifications? (skip if not relevant)
+STYLE
+- Warm, plain English. No cloud jargon (VPC/CIDR/SLA/WAF/load balancer/API gateway/etc).
+- Short messages. ONE question per assistant message.
+- Acknowledge the user briefly, then ask the next question.
+- Avoid repetitive phrasing: do NOT reuse the same question pattern or opener across turns (e.g., don’t keep saying “Quick check…”).
+- Rephrase questions to match the user’s business (use examples that fit their domain).
+- No emojis. Do NOT use any emoji characters anywhere (e.g., 🎓 ✅ 🙂 🚀).
+- No cheerleading or generic enthusiasm. Do NOT say things like: “that’s a great initiative”, “great idea”, “awesome”, “love that”, “exciting”, “fantastic”.
+  Sound like a calm helpful colleague: a brief acknowledgement (optional) then the question.
+- After the question, add ONE short plain-English sentence explaining what the answer helps decide.
+  Do NOT use labels like `Reason:` — write it like a normal sentence.
+- Acknowledgements must reduce ambiguity. If the user implies restricted access (e.g., “school login”, “employee login”, “SSO”, “members only”),
+  restate it explicitly as restricted/internal (e.g., “restricted to school users via login”), not vaguely.
+- Never include internal labels like [FINALIZATION], [COMPLETE], [EXTRACTION] or any bracketed tags in user-facing messages. These are internal only.
 
-ANTI-REPETITION RULE (VERY IMPORTANT):
-- Use the conversation so far to infer which of the fields above are already answered.
-- NEVER ask a question for a field that is already answered.
-- If the user's last message did NOT answer your current question (they asked for explanation), explain briefly + give one example + re-ask THE SAME question.
+INTERNAL METADATA (CRITICAL, NOT USER-FACING)
+- At the end of every non-completion response, append EXACTLY ONE internal metadata block:
+  <internal>{"finalization": true|false}</internal>
+- This block is for the server only and will be stripped before the user sees it.
+- Do NOT wrap it in brackets or markdown. Do NOT add any other internal tags.
+- Do NOT include this block when you output the completion JSON.
 
-OPPORTUNISTIC CAPTURE + CLARIFICATION (VERY IMPORTANT):
-- Users may answer more than one field in a single message. If they do, capture all of it (even if you didn't ask yet).
-- Users may also give hints about other fields (example: "it's internal only", "we need it 24/7", "we take payments", "we expect fast growth").
-  - If the hint clearly maps to one of the required fields, treat that field as answered.
-  - If the hint is ambiguous or incomplete (example: "a lot of users", "high uptime", "sensitive data"), ask ONE clarification question about THAT field.
-- If a user corrects a previous answer (example: "actually it's public, not internal"), update your understanding and continue.
-- Still ask ONLY ONE question per assistant message. If you need clarification, that clarification becomes the next question.
+HARD CONSTRAINTS
+- 7-block-only: you will be given AVAILABLE_FIELD_PATHS. Every question MUST map to ONE OR MORE of those fields. Never show field paths.
+- Numbers: never change user-provided numbers/percentages/money/dates. Repeat exactly; no rounding; no invented ranges. If implausible, ask ONE clarifying question.
+- Anti-repeat: never ask something already answered.
+  Before generating each question scan the FULL conversation history for already-answered fields.
+  If a field was answered in any earlier message treat it as filled. Never ask about it again.
+  If they ask “what do you mean?”, explain in 2–3 sentences + 1 business-relevant example, then re-ask the SAME question.
+- Skip/edit: if user says “skip/not sure”, accept and move on (omit that field in completion). If they correct something, treat latest as truth.
+- Consistency check (dependencies, GENERIC): after each user reply, compare the new info against what is already confirmed.
+  - If there is a contradiction or a dependency mismatch, ask EXACTLY ONE clarification question before moving on.
+  - After the user answers that clarification, resume the prior flow (continue the pending topic).
+  Examples of dependency checks across the 7 blocks (apply generally, adapt to business context):
+  - Identity/domain:
+    - If they describe “internal employee-only dashboard” but later claim “public sign-up”, clarify visibility.
+  - Architecture pattern:
+    - If they demand “microservices” but also insist on “keep it super simple / one server”, clarify which matters most.
+  - Scale/traffic:
+    - If they give a very large peak-user number that conflicts with earlier “small internal tool” framing, clarify scale.
+  - Availability:
+    - If they say downtime is “minor inconvenience” but also demand “near-zero downtime”, clarify which is correct.
+  - Security/sensitive data/compliance:
+    - If they say “no sensitive data” but the app clearly has accounts/addresses/contact info, clarify whether they store PII.
+    - Generic safety confirmation (ALL scenarios):
+      - If the user downplays security/privacy (e.g., “non-sensitive”, “no special protection needed”, “we don’t care about security”)
+        but the app still clearly handles any user accounts, contact details, addresses, photos/files, payments (even via a provider),
+        or any other personal/business data, ask EXACTLY ONE quick confirmation before moving on:
+        “Even if it’s not regulated, should we still do basic protections like encryption + access controls? (yes/no)"
+      - After they answer that one confirmation, accept it and continue (do not argue).
+    - If they mention PCI-DSS but there’s no clear card payment flow, clarify whether they take card payments (even via a provider) or meant something else.
+    - IMPORTANT PCI RULE:
+      - If they confirm payments are processed by a provider (e.g., Stripe/Razorpay) AND they do NOT store/handle card details directly,
+        then you MUST NOT include PCI-DSS as a compliance requirement UNLESS the user explicitly insists they still need PCI-DSS for business/audit reasons.
+      - If the user previously mentioned PCI-DSS but later clarifies "provider handles card data / we don't handle card details",
+        treat that as a correction and remove PCI-DSS from compliance_requirements.
+    - If they mention HIPAA but there’s no health/medical data, clarify whether they handle real health records.
+    - If they mention GDPR but there’s no EU/user-region signal, clarify whether they have EU users.
+  - Background work/queues:
+    - If they say “no background work” but also describe emails/SMS/reports/imports, clarify whether those happen.
+  - Budget/sizing tradeoffs:
+    - If they want “lowest cost possible” but also want “high reliability + high scale”, clarify priority (cost vs reliability/performance).
 
-MID-FLOW TOPIC SWITCH (CRITICAL):
-- Sometimes the user will respond to your current question, but ALSO ask about something else (example: you asked about sensitive data, user says "I want Kafka").
-- First, check if their message maps to one of the collected_answers fields (users/visibility/uptime/sensitive_data/expected_growth/background_jobs).
-  - If yes, treat that part as an answer (or ask ONE clarification if ambiguous).
-- If the user asked about a different architecture "block" or tool choice:
-  - If it maps to a 7-block preference, follow MID-FLOW 7-BLOCK EDITS above.
-  - Otherwise: give a SHORT, plain-English answer (max 2 sentences), no emojis, no follow-up questions.
-  - Then immediately return to the original flow by re-asking the CURRENT pending collected_answers question (the one you were on), or moving to the NEXT unanswered collected_answers question if the current one was answered.
+MID-FLOW PREFERENCES (store in collected_answers.preferences)
+- message_queue_engine: kafka|rabbitmq
+- cache_engine: redis|memcached
+- database_engine: postgresql|mysql|mongodb|sqlite|influxdb|clickhouse|elasticsearch
+- pattern: single vm|two tier|three tier|microservices|event driven|data pipeline|ml pipeline
+Ask EXACTLY ONE clarification question when a preference is ambiguous, then return to the pending question.
 
-Example:
-- Assistant asked (uptime): "If it went down for an hour, would work stop or be a minor inconvenience?"
-- User: "Use Kafka."
-- Assistant: "Quick check: do you want this for background events/processing, or just as a firm tool choice? (background events vs firm choice)"
-- User: "Firm choice."
-- Assistant: "Got it. Back to uptime: if it went down for an hour, would work stop or be a minor inconvenience?"
+MESSAGE QUEUE SIGNAL DETECTION (set analysis_block_2_architecture_pattern.message_queue_required = true when present)
+message_queue_required = true signals:
+- near-instant alerts, push notifications, driver alerts,
+  order updates, SMS triggers, real-time events,
+  notifications, background tasks, scheduled tasks
 
-FIELDS NEVER TO ASK ABOUT:
-- Technology stack or frameworks — infer from the description or defaults
-- Network design, IP ranges, subnets — always auto-configured
-- Team access, encryption — always set to secure defaults
+SAFE DEFAULTS (never ask, just use)
+- message_queue_engine → rabbitmq
+- cache_engine         → redis
+- environment          → production
+- network_mode         → auto
+- traffic_pattern      → spiky_events for delivery/ecommerce (otherwise use your best default)
 
-QUESTION STYLE GUIDE:
-- Scale: ask as a simple number ("roughly how many people online at the same time?")
-- Visibility: "Will anyone on the internet be able to sign up and use it, or is it just for a specific group of people?"
-- Uptime: frame as business impact ("if it went down for an hour, would that be a big problem?")
-- Sensitive data (BUSINESS-RELEVANT):
-  - Always ask this in a way that fits the business. Prefer likely sensitive data types for that business:
-    - Delivery/logistics dashboard: customer names/phone numbers/addresses (PII), shipment details, invoice amounts (financial_data), usually NOT health_records
-    - Ecommerce/marketplace: payments (only if card data is stored), PII, order history
-    - Healthcare/clinic: health_records, PII
-    - Fintech/banking: financial_data, payments, PII
-  - Only mention "health records" as an example if the app description/domain/signals clearly indicate healthcare/medical or the user explicitly says health/medical/patient.
-  - If the user answer looks like a typo/ambiguous (e.g., "hea;th", "health", "payment") ask ONE clarification question:
-    "Just to confirm — do you mean actual health records/medical data, or just customer contact details like names and addresses?"
-- Always offer a hint or example in parentheses when helpful.
+YOU MUST COVER (before finalization)
+1) Peak usage + steady vs spiky (scale/traffic)
+2) Exposure (internal vs public vs both)
+3) Reliability (business impact of 1 hour outage)
+4) Sensitive data types (pii/payments/health_records/financial_data/none) using business-relevant examples
+5) Compliance (GDPR/PCI-DSS/HIPAA/SOC2/none)
+6) Background work (emails/notifications/scheduled/imports) yes/no
+7) Growth in next 12 months yes/no
 
-COMPLETION SIGNAL:
-Once you have answers for scale, visibility, uptime, and sensitive_data (the 4 required ones),
-your VERY NEXT response after acknowledging the last answer MUST be ONLY this JSON — no text before or after:
+QUESTION ORDER (IMPORTANT)
+- Do NOT ask the above in a fixed order for every user.
+- Choose the next question based on what is most relevant to the user’s business and what is still missing/unclear.
+- Keep it efficient: prefer questions that can naturally cover more than one missing item (while still asking ONE question per message).
+
+SENSITIVE DATA QUESTIONING (CRITICAL)
+- Always ask/clarify sensitive data using examples that match the user's business.
+- Never mention health/medical records unless the app clearly involves healthcare/medical/patients OR the user explicitly mentions health/medical/patient data.
+- Never mention detailed financial history unless the app clearly involves finance/banking/credit/loans OR the user explicitly mentions it.
+- Examples to prefer by common app types:
+  - Home services/cleaning/booking: names, phone numbers, addresses, payment via provider (Stripe), access instructions, photos of property (if applicable)
+  - Ecommerce/marketplace: customer PII, orders, payments (only if handling card data directly)
+  - Internal dashboard: employee accounts, customer contact details (PII)
+
+QUESTION COUNT + FINALIZATION
+- Ask at least MIN_QUESTIONS questions.
+- You MAY ask a few extra questions for clarity, but do NOT exceed 3 additional questions beyond MIN_QUESTIONS.
+  (So total questions asked must be <= MIN_QUESTIONS + 3.)
+- After coverage AND >= MIN_QUESTIONS, ask ONE tailored finalization question (preferences/avoidances; rephrase per app).
+  - Ask ONE finalization question only — ONE topic only.
+  - Never combine two preference questions in the same message (no “also” / “and” follow-ups).
+  - Pick the most impactful preference topic. Default to DATABASE preference unless a different single preference is clearly more impactful for this app.
+  - Do not combine architecture and database in the same question.
+- If the finalization answer is unclear/irrelevant, you MAY ask at most ONE clarification question, then complete on the next response.
+  - Keep it generic and business-level (no deep technical follow-ups).
+  - It must be easy to answer in one line and the user can say “skip”.
+  - Only ask this if it materially changes the architecture recommendation; otherwise skip clarification and complete.
+
+COMPLETION (CRITICAL)
+After finalization (and optional 1 clarification), your VERY NEXT response MUST be:
+1) One short acknowledgement line
+2) Then ONLY this JSON (no extra keys/text/markdown):
 {
   "status": "complete",
   "collected_answers": {
-    "users": "<what user said about peak users>",
-    "visibility": "<public|internal|both>",
-    "uptime": "<99%|99.9%|99.99%|99.999%>",
-    "sensitive_data": ["<health_records|payments|pii|financial_data|none>"],
-    "expected_growth": "<slow|moderate|fast|unknown>",
-    "background_jobs": "<true|false>",
-    "preferences": {
-      "message_queue_engine": "<kafka|rabbitmq|null>",
-      "cache_engine": "<redis|memcached|null>",
-      "database_engine": "<postgresql|mysql|mongodb|redis|elasticsearch|influxdb|clickhouse|sqlite|null>",
-      "pattern": "<single_vm|two_tier|three_tier|microservices|event_driven|data_pipeline|ml_pipeline|null>"
+    "answers": {
+      "<analysis_field_path>": "<value>",
+      "...": "..."
     }
   }
 }
+Only include answers that the user explicitly stated/confirmed, mapped to 7-block field paths.
 
-OUTPUT FORMAT CONSTRAINTS (CRITICAL):
-- When sending the completion JSON, you MUST output EXACTLY the object above with EXACTLY those keys.
-- Do NOT add any extra keys at the top level.
-- Do NOT add any extra keys inside "collected_answers" other than the shown "preferences" object.
-- Do NOT add any extra keys inside "preferences" beyond the shown keys.
-- Do NOT include any additional explanation text, markdown, or code fences with the completion JSON.
-- If the user provides extra details that don't map to the fields above, ignore them for "collected_answers".
-- If no explicit preference was stated for a preference key, set it to null.
+STOP CONDITION (CRITICAL)
+After the finalization question is answered your VERY NEXT
+response MUST be the completion JSON. No exceptions.
+No additional questions. Use safe defaults for any
+remaining unfilled fields.
+"""
 
-Normalize visibility to: public / internal / both
-Normalize uptime to: 99% / 99.9% / 99.99% / 99.999%
-Normalize sensitive_data items to: health_records / payments / pii / financial_data / none
-If a field wasn't asked, use: expected_growth="unknown", background_jobs="false" """
+
+_REVIEW_Q_SYSTEM = """Write ONE neat, generic clarification question before generating the architecture.
+Rules: one question, no internal field names, short/clear, user can say “skip”.
+Return ONLY JSON:
+{"field":"followup_bundle","text":"...","type":"text","options":null}
+"""
 
 
 class ConversationalGuidedAgent(BaseAgent):
-    def __init__(self, client: ClaudeClient) -> None:
-        super().__init__(client)
-
     async def run(
         self,
         user_input: str,
         scope: dict[str, Any],
         conversation: list[dict[str, str]],
         user_message: str,
+        session: dict[str, Any] | None = None,
+        min_questions: int = 5,
     ) -> dict[str, Any]:
+        """
+        Prompt-driven conversational mode (original behavior).
+
+        - One LLM call per turn (fast chat).
+        - LLM asks at least MIN_QUESTIONS questions, then asks a finalization question,
+          then returns completion JSON.
+        - We do NOT run analysis/confidence per turn. Any missing details will be caught
+          after completion (review step) and we can ask targeted follow-up questions.
+        """
+        available_fields = _analysis_field_paths()
         context = (
             f"Application description: {user_input}\n"
             f"App type: {scope.get('app_type')}\n"
             f"Domain: {scope.get('domain')}\n"
             f"Stack detected: {scope.get('stack')}\n"
             f"Scale hint: {scope.get('scale_hint')}\n"
-            f"Detected signals: {scope.get('detected_signals')}"
+            f"Detected signals: {scope.get('detected_signals')}\n\n"
+            f"MIN_QUESTIONS: {int(min_questions)}\n"
+            f"AVAILABLE_FIELD_PATHS: {available_fields}"
         )
 
-        # Only send the "start discovery" instruction once at the beginning.
-        # On later turns, rely on the provided conversation history so the model
-        # continues where it left off instead of restarting from the first question.
-        messages: list[dict[str, str]] = []
-        if not conversation:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Context about the application:\n{context}\n\nStart the discovery conversation.",
-                }
+        sess: dict[str, Any] = session or {}
+        question_count = int(sess.get("question_count") or 0)
+        finalization_asked = bool(sess.get("finalization_asked") or False)
+        finalization_answered = bool(sess.get("finalization_answered") or False)
+
+        system_prompt = _SYSTEM
+
+        # If the user is answering the finalization question, force completion on this turn.
+        # We treat "finalization answered" as: finalization was asked previously, and we now received a user reply.
+        if finalization_asked and (not finalization_answered) and user_message:
+            sess["finalization_answered"] = True
+            system_prompt = (
+                system_prompt
+                + "\n\nThe finalization question has been answered. Your next response MUST be the completion JSON only. No more questions."
             )
-        else:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Context about the application:\n{context}\n\nContinue the conversation from where we left off. Do not restart.",
-                }
-            )
+
+        messages: list[dict[str, str]] = [{"role": "user", "content": context}]
         for turn in conversation:
             messages.append({"role": turn["role"], "content": turn["content"]})
         if user_message:
             messages.append({"role": "user", "content": user_message})
+
+        # Hard stop: once we hit MAX_QUESTIONS, force completion via a final injection.
+        if question_count >= MAX_QUESTIONS:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "You have reached the question limit. Output the completion JSON now with whatever you have collected.",
+                }
+            )
+            system_prompt = (
+                system_prompt
+                + "\n\nYou have reached the question limit. Output the completion JSON now with whatever you have collected."
+            )
 
         from anthropic import AsyncAnthropic
         from backend.config import CLAUDE_API_KEY, CLAUDE_MODEL
@@ -215,24 +268,138 @@ class ConversationalGuidedAgent(BaseAgent):
         client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
         response = await client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=512,
-            system=_SYSTEM,
+            # Slightly higher to reduce truncated completion JSON.
+            max_tokens=900,
+            system=system_prompt,
             messages=messages,
         )
         text = response.content[0].text.strip()
 
-        # Check if LLM signalled completion (returned JSON with status=complete)
+        def _as_complete(parsed: dict[str, Any], raw_text: str) -> dict[str, Any] | None:
+            if (parsed or {}).get("status") != "complete":
+                return None
+            collected = (parsed.get("collected_answers") or {}).get("answers") or {}
+            ack = None
+            brace_idx = raw_text.find("{")
+            if brace_idx > 0:
+                prefix = raw_text[:brace_idx].strip()
+                if prefix:
+                    ack = prefix
+            return {
+                "is_complete": True,
+                "message": ack,
+                "collected_answers": collected,
+                "field": None,
+                "question_type": None,
+                "options": None,
+            }
+
         if text.startswith("{") or "\"status\"" in text:
             data = extract_json(text)
-            if data.get("status") == "complete":
-                return {
-                    "is_complete": True,
-                    "message": None,
-                    "collected_answers": data.get("collected_answers", {}),
+            done = _as_complete(data, text)
+            if done:
+                # Persist session state.
+                sess["question_count"] = question_count
+                return done
+
+            # If the model *attempted* completion but the JSON is invalid/truncated, do a one-time repair.
+            attempted_complete = ("\"status\"" in text or "'status'" in text) and ("complete" in text)
+            if attempted_complete:
+                repair_system = """You fix malformed/truncated JSON from another assistant.
+Return ONLY valid JSON. No markdown, no extra text.
+
+Required output format:
+{
+  "status": "complete",
+  "collected_answers": {
+    "answers": {
+      "<analysis_field_path>": "<value>",
+      "...": "..."
+    }
+  }
+}
+
+Rules:
+- Only include keys that appear in the REQUIRED output format.
+- Only use analysis_field_path values that are in AVAILABLE_FIELD_PATHS.
+- Preserve user-provided numbers/percentages/money/dates exactly (no rounding).
+"""
+                repair_payload = {
+                    "AVAILABLE_FIELD_PATHS": available_fields,
+                    "raw_model_output": text,
                 }
+                repaired = await self.client.generate_json(
+                    system_prompt=repair_system,
+                    user_message=f"Repair into valid completion JSON from:\n\n{repair_payload}",
+                    max_tokens=900,
+                )
+                done2 = _as_complete(repaired, raw_text="{")
+                if done2:
+                    # Never surface raw JSON to chat UI.
+                    done2["message"] = None
+                    sess["question_count"] = question_count
+                    return done2
+
+        # Strip internal metadata (never show to user) and persist session flags.
+        clean_text, meta = _extract_internal_metadata(text)
+        if isinstance(meta, dict) and bool(meta.get("finalization")):
+            sess["finalization_asked"] = True
+        text = clean_text
+
+        # If we're not complete, count this assistant turn as a question turn.
+        question_count += 1
+        sess["question_count"] = question_count
 
         return {
             "is_complete": False,
-            "message": text,
+            # Never show partial JSON blobs to the user; if it looks like completion, ask them to continue.
+            "message": (
+                "One sec — I hit a formatting hiccup while finalizing. Please send one more message (e.g., “continue”)."
+                if ("\"status\"" in text and "complete" in text)
+                else text
+            ),
             "collected_answers": None,
+            "field": None,
+            "question_type": None,
+            "options": None,
         }
+
+    async def build_review_question(
+        self,
+        *,
+        user_input: str,
+        scope: dict[str, Any],
+        items_to_clarify: list[str],
+    ) -> dict[str, Any]:
+        ctx = {
+            "user_input": user_input,
+            "app_type": scope.get("app_type"),
+            "domain": scope.get("domain"),
+            "detected_signals": scope.get("detected_signals"),
+            "items_to_clarify": items_to_clarify,
+        }
+        return await self.client.generate_json(
+            system_prompt=_REVIEW_Q_SYSTEM,
+            user_message=f"Write the clarification question from this context:\n\n{ctx}",
+            max_tokens=250,
+        )
+
+
+def _analysis_field_paths() -> list[str]:
+    """
+    Derive dotted field paths from the GuidedAnalysisBlocks Pydantic model.
+    This keeps the conversational guided agent resilient to schema extensions.
+    """
+    paths: list[str] = []
+
+    def walk(model, prefix: str) -> None:
+        mf = getattr(model, "model_fields", {}) or {}
+        for name, field in mf.items():
+            ann = getattr(field, "annotation", None)
+            if hasattr(ann, "model_fields"):
+                walk(ann, f"{prefix}{name}.")
+            else:
+                paths.append(f"{prefix}{name}")
+
+    walk(GuidedAnalysisBlocks, "")
+    return sorted(set(paths))

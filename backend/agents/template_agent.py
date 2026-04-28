@@ -30,7 +30,29 @@ Template selection rules:
 - event/queue/async → event-driven template
 - simple web/SaaS with DB → three-tier web
 - mobile backend / simple API → two-tier
-- Always choose the simplest template that meets requirements (avoid over-engineering)"""
+- Always choose the simplest template that meets requirements (avoid over-engineering)
+
+COMPONENT SYNC (CRITICAL)
+The selected template's cytoscape_elements must include nodes for every enabled component in the analysis blocks:
+- message_queue_required=true → there must be a queue node (Kafka, RabbitMQ, or generic queue)
+- cache_required=true → there must be a cache node (Redis/Memcached)
+- api_gateway_required=true → there must be an API gateway node
+- load_balancer_required=true → there must be a load balancer node
+- db_replica=true → there must be a replica/standby DB node
+- waf_required=true → there must be a WAF node
+- bastion_required=true → there must be a bastion host node
+- disaster_recovery_required=true → there must be a DR/secondary region node
+When choosing between templates, prefer the one whose diagram already includes all required components.
+Set configuration variables (enable_cdn, enable_waf, cache_enabled, etc.) to reflect every enabled block field.
+
+CLIENT TYPE IN DIAGRAM (CRITICAL)
+The entry point into the architecture must reflect the actual client type from requirements.app_type:
+- web_application / ecommerce / saas → entry node should be "Web Browser" or "User (Browser)"
+- mobile_app → entry node should be "Mobile App (iOS/Android)"
+- api_service / backend_service → entry node should be "Third-party API Consumer" or "External Client"
+- cli_tool → entry node should be "CLI User"
+- data_pipeline / ml_model → entry node should be "Data Source" or "Upstream System"
+Set configuration.overrides.client_type to the appropriate label so the diagram generation layer can use it."""
 
 
 class TemplateAgent(BaseAgent):

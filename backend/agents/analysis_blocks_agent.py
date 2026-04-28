@@ -30,6 +30,47 @@ OUTPUT RULES
 SKELETON (fill all values; replace only the values)
 {"analysis_block_1_application_identity":{"app_type":"web_application","app_name":"web-app","frontend_framework":null,"framework":null,"language":null,"database_required":true,"database_engine":"postgresql","domain":"general"},"analysis_block_2_architecture_pattern":{"pattern":"three_tier","separate_frontend_backend":false,"multiple_services":false,"api_gateway_required":false,"load_balancer_required":false,"message_queue_required":false,"message_queue_engine":"none","cache_required":false,"cache_engine":"none"},"analysis_block_3_network_design":{"network_mode":"auto","vpc_cidr":"10.0.0.0/16","public_subnet_cidr":"10.0.1.0/24","private_subnet_cidr":"10.0.2.0/24","db_subnet_cidr":"10.0.3.0/24","nat_gateway":true,"admin_cidr_blocks":[]},"analysis_block_4_traffic_and_scale":{"concurrent_users_band":"100_to_1k","data_storage_band":"medium_10_to_500gb","traffic_pattern":"steady","expected_growth":false,"resolved_scale":"small"},"analysis_block_5_availability":{"downtime_impact":"casual_acceptable","single_server_failure_tolerance":false,"disaster_recovery_required":false,"sla_target":"best_effort","web_vm_count":1,"app_vm_count":1,"db_replica":false,"multi_az":false,"backup_policy":"none"},"analysis_block_6_access_and_security":{"public_facing":false,"team_ssh_access":true,"compliance_requirements":["none"],"handles_sensitive_data":false,"sensitive_data_types":["none"],"bastion_required":false,"waf_required":false,"encryption_at_rest":true,"encryption_in_transit":true,"audit_log_required":false,"tls_version":"1.2"},"analysis_block_7_resource_sizing_and_budget":{"vm_size_preference":"medium_4vcpu_8gb","monthly_budget_ceiling_usd":null,"environment":"production","web_vm_type":"medium","app_vm_type":"medium","db_vm_type":"large","db_storage_gb":100,"cost_estimate_monthly_inr":null,"cost_optimised_variant_available":false}}
 
+USER OVERRIDE RULES (CRITICAL — apply before all other rules)
+If previous_answers contains an explicit user-stated value for any field:
+  - That value MUST appear in the output unchanged.
+  - Never silently disable a component the user confirmed.
+  - If there is a cost or complexity reason to reconsider, set the component as requested
+    AND surface the concern in analysis_block_7_resource_sizing_and_budget as a note
+    (use cost_optimised_variant_available=true and set cost_estimate_monthly_inr if calculable).
+  - "Explicit" means: the user directly answered a question about that field in previous_answers.
+    Scope-inferred values are NOT explicit user overrides.
+
+COMPLIANCE COMPLETENESS (CRITICAL)
+  - Every compliance requirement the user explicitly stated must appear in compliance_requirements[].
+  - Never drop a compliance requirement from the output, even if it seems redundant with another.
+  - If the user stated multiple (e.g. GDPR + HIPAA), both must be in the array.
+  - Self-check: count the compliance items the user mentioned. Count the items in your output. They must match.
+
+BUDGET AS CONSTRAINT (CRITICAL)
+  - If previous_answers contains monthly_budget_ceiling_usd or a budget figure:
+    - Set monthly_budget_ceiling_usd to that value.
+    - Estimate cost_estimate_monthly_inr for the proposed architecture.
+    - If estimated cost exceeds the ceiling, set cost_optimised_variant_available=true
+      and size down VMs (web_vm_type, app_vm_type) by one tier to fit the budget.
+    - Never present an architecture that silently exceeds the stated budget.
+  - If no budget is stated, leave monthly_budget_ceiling_usd null.
+
+INFERRED VS STATED (CRITICAL)
+  - Fields filled from user's explicit answers are "stated."
+  - Fields filled by your inference or defaults are "inferred."
+  - For every inferred field that has meaningful impact (database_engine, pattern, sla_target,
+    cache_engine, message_queue_engine, compliance_requirements), prefix the value with no change
+    but set a parallel "_inferred" marker in a top-level "inferred_fields" array in your output.
+  - Output format: add "inferred_fields": ["field.path", ...] as a sibling of the analysis blocks.
+  - This array will be surfaced to the user so they know what was assumed on their behalf.
+
+GRACEFUL DEFAULTS FOR SKIPPED OR RECOMMEND FIELDS
+  - If previous_answers contains "__recommend__" for a field, fill a sensible default
+    based on the rest of the context and add that field to inferred_fields[].
+  - If a field is null/missing and cannot be derived, apply the DEFAULTS above.
+  - Never leave a field null that has a safe default — always fill something reasonable.
+  - The output must always be a complete, deployable architecture even if many fields were skipped.
+
 BLOCK RULES
 
 Block 1 — Application Identity

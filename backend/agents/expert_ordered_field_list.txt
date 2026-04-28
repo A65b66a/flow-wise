@@ -1,0 +1,106 @@
+ORDERED FIELD LIST
+Ask in this exact order. Never skip a field unless it is derived or the user skips it.
+
+Block 1
+  analysis_block_1_application_identity.app_type
+    Allowed: web_application | api_service | data_pipeline | ml_model | ecommerce | real_time | devops_tool | other
+  analysis_block_1_application_identity.app_name
+    Allowed: free text
+  analysis_block_1_application_identity.frontend_framework
+    Allowed: react | vue | angular | nextjs | nuxt | svelte | other | null
+  analysis_block_1_application_identity.framework
+    Allowed: django | nodejs | spring_boot | fastapi | laravel | rails | nextjs | other | null
+  analysis_block_1_application_identity.language
+    Allowed: python | javascript | java | php | go | ruby | typescript | other | null
+  analysis_block_1_application_identity.database_required
+    Allowed: true | false
+  analysis_block_1_application_identity.database_engine
+    Allowed: postgresql | mysql | mongodb | redis | elasticsearch | influxdb | clickhouse | sqlite | null
+  analysis_block_1_application_identity.domain
+    Allowed: healthcare | fintech | ecommerce | media | devops | general | other
+
+Block 2
+  analysis_block_2_architecture_pattern.pattern
+    Allowed: single_vm | two_tier | three_tier | microservices | event_driven | data_pipeline | ml_pipeline
+  analysis_block_2_architecture_pattern.separate_frontend_backend
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.multiple_services
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.api_gateway_required
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.load_balancer_required
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.message_queue_required
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.message_queue_engine
+    Allowed: rabbitmq | kafka | none
+  analysis_block_2_architecture_pattern.cache_required
+    Allowed: true | false
+  analysis_block_2_architecture_pattern.cache_engine
+    Allowed: redis | memcached | none
+
+Block 3
+  analysis_block_3_network_design.network_mode
+    Allowed: auto | manual
+  analysis_block_3_network_design.vpc_cidr
+    Allowed: valid CIDR string
+  analysis_block_3_network_design.public_subnet_cidr
+    Allowed: valid CIDR string
+  analysis_block_3_network_design.private_subnet_cidr
+    Allowed: valid CIDR string
+  analysis_block_3_network_design.db_subnet_cidr
+    Allowed: valid CIDR string
+  analysis_block_3_network_design.admin_cidr_blocks
+    Allowed: array of valid CIDR strings
+
+Block 4
+  analysis_block_4_traffic_and_scale.concurrent_users_band
+    Allowed: under_100 | 100_to_1k | 1k_to_10k | 10k_to_100k | 100k_plus
+  analysis_block_4_traffic_and_scale.data_storage_band
+    Allowed: small_under_10gb | medium_10_to_500gb | large_500gb_plus
+  analysis_block_4_traffic_and_scale.traffic_pattern
+    Allowed: steady | spiky_events | scheduled_batch | realtime_continuous
+  analysis_block_4_traffic_and_scale.expected_growth
+    Allowed: true | false
+
+Block 5
+  analysis_block_5_availability.sla_target
+    Allowed: best_effort | 99.9 | 99.99
+  analysis_block_5_availability.db_replica
+    Allowed: true | false
+  analysis_block_5_availability.multi_az
+    Allowed: true | false
+  analysis_block_5_availability.backup_policy
+    Allowed: none | daily | hourly
+  analysis_block_5_availability.disaster_recovery_required
+    Allowed: true | false
+  analysis_block_5_availability.web_vm_count
+    Allowed: 1 | 2 | 3
+  analysis_block_5_availability.app_vm_count
+    Allowed: 1 | 2 | 3
+
+Block 6
+  analysis_block_6_access_and_security.public_facing
+    Allowed: true | false
+  analysis_block_6_access_and_security.compliance_requirements
+    Allowed: HIPAA | PCI-DSS | GDPR | SOC2 | none
+    Type: list — can contain multiple values
+  analysis_block_6_access_and_security.sensitive_data_types
+    Allowed: payments | health_records | financial_data | pii | none
+    Type: list — can contain multiple values
+  analysis_block_6_access_and_security.waf_required
+    Allowed: true | false
+  analysis_block_6_access_and_security.audit_log_required
+    Allowed: true | false
+  analysis_block_6_access_and_security.tls_version
+    Allowed: 1.2 | 1.3
+
+Block 7
+  analysis_block_7_resource_sizing_and_budget.vm_size_preference
+    Allowed: small_2vcpu_4gb | medium_4vcpu_8gb | large_8vcpu_16gb | xlarge_16vcpu_32gb | auto_recommend
+  analysis_block_7_resource_sizing_and_budget.monthly_budget_ceiling_usd
+    Allowed: number | null
+  analysis_block_7_resource_sizing_and_budget.environment
+    Allowed: development | staging | production
+  analysis_block_7_resource_sizing_and_budget.db_storage_gb
+    Allowed: any positive integer (GB)

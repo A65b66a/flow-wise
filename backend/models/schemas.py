@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 from typing import Any
 from typing import Literal
@@ -136,14 +138,38 @@ class ConversationTurn(BaseModel):
 class ConversationalMessageRequest(BaseModel):
     user_input: str
     scope: ScopeResponse
+    # Optional server-side session id for stateful conversational guided mode.
+    # If omitted, the server may create a new session.
+    session_id: str | None = None
     conversation: list[ConversationTurn] = Field(default_factory=list)
     message: str
+    # Prompt-driven question budget for conversational guided.
+    # The LLM is responsible for asking at least this many questions before completing.
+    min_questions: int = 5
 
 
 class ConversationalMessageResponse(BaseModel):
     is_complete: bool
+    session_id: str | None = None
     message: str | None = None
     collected_answers: dict[str, Any] | None = None
+    # Optional UI hints (may be null for pure-chat rendering).
+    field: str | None = None
+    question_type: str | None = None  # single_choice | multi_choice | number | text
+    options: list[str] | None = None
+
+
+class ConversationalReviewRequest(BaseModel):
+    user_input: str
+    scope: ScopeResponse
+    answers: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationalReviewResponse(BaseModel):
+    status: Literal["questioning", "complete"]
+    question: GuidedLoopQuestion | None = None
+    analysis_blocks: GuidedAnalysisBlocks | None = None
+    confidence: AnalysisConfidence | None = None
 
 
 # ── Guided Analysis Blocks (7-block schema) ─────────────────────────────────
@@ -287,7 +313,7 @@ VmSizePreference = Literal[
 ]
 VmType = Literal["small", "medium", "large", "xlarge"]
 Environment = Literal["development", "staging", "production"]
-DbStorageGb = Literal["20", "50", "100", "200", "500", "1000", 20, 50, 100, 200, 500, 1000]
+DbStorageGb = int
 
 
 class AnalysisBlock7ResourceSizingAndBudget(BaseModel):
@@ -297,7 +323,7 @@ class AnalysisBlock7ResourceSizingAndBudget(BaseModel):
     web_vm_type: VmType
     app_vm_type: VmType
     db_vm_type: VmType
-    db_storage_gb: DbStorageGb
+    db_storage_gb: DbStorageGb = Field(ge=1)
     cost_estimate_monthly_inr: int | None = None
     cost_optimised_variant_available: bool
 
@@ -370,6 +396,54 @@ class GuidedLoopSessionState(BaseModel):
     answers: dict[str, Any] = Field(default_factory=dict)
     question_count: int = 0
     max_questions: int = 10
+    analysis_blocks: GuidedAnalysisBlocks | None = None
+    confidence: AnalysisConfidence | None = None
+    status: Literal["questioning", "complete", "failed"] = "questioning"
+
+
+# ── Expert Loop Mode (ask many fields) ───────────────────────────────────────
+class ExpertLoopStartRequest(BaseModel):
+    user_input: str
+    scope: ScopeResponse
+    min_questions: int = 20
+
+
+class ExpertLoopStartResponse(BaseModel):
+    session_id: str
+    status: Literal["questioning", "complete", "failed"]
+    question: GuidedLoopQuestion | None = None
+    question_number: int | None = None
+    analysis_blocks: GuidedAnalysisBlocks | None = None
+    confidence: AnalysisConfidence | None = None
+    solution: "SolutionOutput | None" = None
+
+
+class ExpertLoopAnswerRequest(BaseModel):
+    session_id: str
+    field: str
+    value: Any
+
+
+class ExpertLoopAnswerResponse(BaseModel):
+    session_id: str
+    status: Literal["questioning", "complete", "failed"]
+    question: GuidedLoopQuestion | None = None
+    question_number: int | None = None
+    analysis_blocks: GuidedAnalysisBlocks | None = None
+    confidence: AnalysisConfidence | None = None
+    solution: "SolutionOutput | None" = None
+
+
+class ExpertLoopSessionState(BaseModel):
+    session_id: str
+    mode: Literal["expert_loop"] = "expert_loop"
+    user_input: str
+    scope: ScopeResponse
+    conversation: list[ConversationTurn] = Field(default_factory=list)
+    answers: dict[str, Any] = Field(default_factory=dict)
+    question_count: int = 0
+    min_questions: int = 20
+    current_question: GuidedLoopQuestion | None = None
     analysis_blocks: GuidedAnalysisBlocks | None = None
     confidence: AnalysisConfidence | None = None
     status: Literal["questioning", "complete", "failed"] = "questioning"

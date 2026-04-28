@@ -30,10 +30,9 @@ export default function AutoModeScreen() {
     setLoading(true)
     setError(null)
     try {
-      // Generate 7-block analysis JSON for display in SolutionOutput.
-      const analysis = await api.guidedAnalysis(userInput, scopeResult, {})
-      setAnalysisBlocks(analysis)
       const solution = await api.autoComplete(userInput, scopeResult, autoPilotInit, localInputs)
+      // Prefer the analysis blocks used to generate this solution (includes quick inputs + detections).
+      setAnalysisBlocks(solution?.analysis_blocks || null)
       setSolution(solution)
       setScreen('solution')
     } catch (err) {

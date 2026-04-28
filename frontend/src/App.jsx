@@ -6,6 +6,7 @@ import GuidedModeScreen from './components/GuidedModeScreen'
 import SmartGuidedScreen from './components/SmartGuidedScreen'
 import ConversationalGuidedScreen from './components/ConversationalGuidedScreen'
 import GuidedLoopScreen from './components/GuidedLoopScreen'
+import ExpertModeScreen from './components/ExpertModeScreen'
 import SolutionOutput from './components/SolutionOutput'
 import ErrorBanner from './components/shared/ErrorBanner'
 
@@ -13,9 +14,10 @@ const SCREENS = {
   entry: EntryScreen,
   'mode-selection': ModeSelection,
   'auto-mode': AutoModeScreen,
-  'guided-mode': GuidedLoopScreen,
+  'guided-mode': ConversationalGuidedScreen,
   'guided-mode-smart': SmartGuidedScreen,
   'guided-mode-classic': GuidedModeScreen,
+  'expert-mode': ExpertModeScreen,
   solution: SolutionOutput,
 }
 

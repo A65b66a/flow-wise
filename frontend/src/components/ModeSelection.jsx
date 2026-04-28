@@ -62,6 +62,8 @@ export default function ModeSelection() {
       }
     } else if (mode === 'GUIDED') {
       setScreen('guided-mode')
+    } else if (mode === 'EXPERT') {
+      setScreen('expert-mode')
     } else {
       setScreen('guided-mode')
     }

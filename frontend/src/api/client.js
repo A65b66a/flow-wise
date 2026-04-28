@@ -58,9 +58,21 @@ export const api = {
       .post('/guided/complete', { user_input: userInput, scope, answers })
       .then((r) => r.data),
 
-  conversationalMessage: (userInput, scope, conversation, message) =>
+  conversationalMessage: (userInput, scope, conversation, message, minQuestions = 5, sessionId = null) =>
     http
-      .post('/guided/conversation/message', { user_input: userInput, scope, conversation, message })
+      .post('/guided/conversation/message', {
+        user_input: userInput,
+        scope,
+        session_id: sessionId,
+        conversation,
+        message,
+        min_questions: minQuestions,
+      })
+      .then((r) => r.data),
+
+  conversationalReview: (userInput, scope, answers) =>
+    http
+      .post('/guided/conversation/review', { user_input: userInput, scope, answers: answers || {} })
       .then((r) => r.data),
 
   smartGuidedQuestions: (userInput, scope) =>
@@ -83,6 +95,19 @@ export const api = {
 
   guidedLoopSession: (sessionId) =>
     http.get(`/guided/loop/session/${sessionId}`).then((r) => r.data),
+
+  expertLoopStart: (userInput, scope, minQuestions = 20, maxQuestions = 60) =>
+    http
+      .post('/expert/loop/start', { user_input: userInput, scope, min_questions: minQuestions, max_questions: maxQuestions })
+      .then((r) => r.data),
+
+  expertLoopAnswer: (sessionId, field, value) =>
+    http
+      .post('/expert/loop/answer', { session_id: sessionId, field, value })
+      .then((r) => r.data),
+
+  expertLoopSession: (sessionId) =>
+    http.get(`/expert/loop/session/${sessionId}`).then((r) => r.data),
 
   getTemplates: () => http.get('/templates').then((r) => r.data),
 }

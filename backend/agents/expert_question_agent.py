@@ -624,11 +624,14 @@ class ExpertQuestionAgent(BaseAgent):
         # IMPORTANT: Do not use str.format() here because the prompt contains JSON examples
         # with braces like {"status": "..."} which would be interpreted as format placeholders.
         system_prompt = _SYSTEM_BASE.replace("{ORDERED_FIELD_LIST}", ordered_field_list)
+        # Trim conversation to last 20 messages (10 turns). The answers dict already
+        # captures all extracted data; older history just inflates the input token count.
+        recent_conversation = (conversation or [])[-20:]
         context = {
             "user_input": user_input,
             "scope": scope or {},
             "answers": answers,
-            "conversation": conversation or [],
+            "conversation": recent_conversation,
             "last_question_field": last_question_field,
             "last_question_text": last_question_text,
             "user_reply": user_reply or "",
@@ -638,6 +641,7 @@ class ExpertQuestionAgent(BaseAgent):
             system_prompt=system_prompt,
             user_message=f"Run the expert turn from this context:\n\n{context}",
             max_tokens=700,
+            cache_system=True,
         )
 
         # Generic robustness: retry once if the model didn't return a usable question payload.
@@ -654,6 +658,7 @@ class ExpertQuestionAgent(BaseAgent):
                         f"Context:\n\n{context}"
                     ),
                     max_tokens=700,
+                    cache_system=True,
                 )
                 return repair
 

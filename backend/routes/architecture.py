@@ -215,6 +215,8 @@ async def analyze_scope(req: ScopeRequest):
         client = _get_client()
         agent = ScopeAgent(client)
         result = await agent.run(user_input=req.user_input)
+        if result.get("error") == "content_policy_violation":
+            raise HTTPException(status_code=422, detail=result)
         return ScopeResponse(**result)
     except HTTPException:
         raise
